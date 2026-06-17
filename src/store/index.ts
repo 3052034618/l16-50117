@@ -4,6 +4,7 @@ import type {
   Category, Department, User, Asset, DepreciationRecord,
   AllocationRecord, TransferRecord, ScrapRecord,
   InventoryPlan, InventoryDetail, DashboardStats, PostedPeriod,
+  DepreciationVoucher, ScrapVoucher, FinanceVoucher, VoucherEntry,
 } from '@/types';
 import { STORAGE_KEYS } from '@/utils/constants';
 import { generateId, generateAssetNo, getCurrentPeriod, generateQRCodeData } from '@/utils/helpers';
@@ -27,6 +28,8 @@ interface AppState {
   scraps: ScrapRecord[];
   inventoryPlans: InventoryPlan[];
   inventoryDetails: InventoryDetail[];
+  depreciationVouchers: DepreciationVoucher[];
+  scrapVouchers: ScrapVoucher[];
   currentUser: User | null;
   initialized: boolean;
 
@@ -46,14 +49,15 @@ interface AppState {
 
   createAllocation: (assetId: string, userId: string, departmentId: string) => AllocationRecord;
   confirmAllocation: (allocationId: string) => void;
+  returnAllocation: (allocationId: string) => void;
 
   createTransfer: (assetId: string, toUserId: string, reason?: string) => TransferRecord;
-  approveTransfer: (transferId: string) => void;
-  rejectTransfer: (transferId: string, reason?: string) => void;
+  approveTransfer: (transferId: string, approverId?: string) => void;
+  rejectTransfer: (transferId: string, reason?: string, rejectorId?: string) => void;
   confirmTransfer: (transferId: string) => void;
 
   createScrap: (assetId: string, applyUserId: string, reason: string) => ScrapRecord;
-  approveScrap: (scrapId: string, residualIncome: number) => void;
+  approveScrap: (scrapId: string, residualIncome: number) => ScrapVoucher | undefined;
   rejectScrap: (scrapId: string, reason?: string) => void;
 
   createInventoryPlan: (name: string, startDate: string, endDate: string, createdBy: string, scopeDepartmentId?: string, scopeLocation?: string) => InventoryPlan;
@@ -62,6 +66,13 @@ interface AppState {
   checkAsset: (planId: string, assetId: string, result: 'matched' | 'mismatched' | 'lost', remark?: string, actualLocation?: string, actualUserId?: string) => void;
   getInventoryDetails: (planId: string) => (InventoryDetail & { asset?: Asset })[];
   getInventorySummary: (planId: string) => { total: number; checked: number; matched: number; mismatched: number; lost: number };
+
+  createDepreciationVoucher: (period: string, dimension: 'category' | 'department') => DepreciationVoucher;
+  getDepreciationVoucherByPeriod: (period: string) => DepreciationVoucher | undefined;
+  createScrapVoucherFromScrap: (scrapId: string) => ScrapVoucher | undefined;
+  confirmVoucher: (voucherId: string, voucherType: 'depreciation' | 'scrap', confirmerId?: string) => void;
+  revokeVoucher: (voucherId: string, voucherType: 'depreciation' | 'scrap', revokerId?: string) => void;
+  getAllVouchers: () => FinanceVoucher[];
 
   addCategory: (category: Omit<Category, 'id'>) => Category;
   updateCategory: (id: string, category: Partial<Category>) => void;
@@ -92,6 +103,8 @@ const useAppStore = create<AppState>()(
       scraps: [],
       inventoryPlans: [],
       inventoryDetails: [],
+      depreciationVouchers: [],
+      scrapVouchers: [],
       currentUser: null,
       initialized: false,
 
@@ -109,11 +122,13 @@ const useAppStore = create<AppState>()(
           users: mockUsers,
           assets: mockAssets,
           depreciationRecords: mockDepreciationRecords,
-          allocations: mockAllocations,
+          allocations: mockAllocations.map(a => ({ ...a, type: 'allocate' as const })),
           transfers: mockTransfers,
           scraps: mockScraps,
           inventoryPlans: mockInventoryPlans,
           inventoryDetails: mockInventoryDetails,
+          depreciationVouchers: [],
+          scrapVouchers: [],
           currentUser: mockUsers[0],
           initialized: true,
         });
@@ -287,6 +302,7 @@ const useAppStore = create<AppState>()(
           departmentId,
           allocationDate: dayjs().format('YYYY-MM-DD'),
           status: 'pending',
+          type: 'allocate',
         };
 
         get().updateAsset(assetId, {
@@ -308,6 +324,26 @@ const useAppStore = create<AppState>()(
           allocations: allocations.map(a =>
             a.id === allocationId
               ? { ...a, status: 'confirmed', confirmedAt: dayjs().format('YYYY-MM-DD') }
+              : a
+          ),
+        });
+      },
+
+      returnAllocation: (allocationId) => {
+        const { allocations } = get();
+        const allocation = allocations.find(a => a.id === allocationId);
+        if (!allocation) return;
+
+        get().updateAsset(allocation.assetId, {
+          status: 'in-stock',
+          currentUserId: undefined,
+          currentDepartmentId: undefined,
+        });
+
+        set({
+          allocations: allocations.map(a =>
+            a.id === allocationId
+              ? { ...a, status: 'returned', type: 'return' as const, returnedAt: dayjs().format('YYYY-MM-DD') }
               : a
           ),
         });
@@ -339,24 +375,35 @@ const useAppStore = create<AppState>()(
         return transfer;
       },
 
-      approveTransfer: (transferId) => {
-        const { transfers } = get();
+      approveTransfer: (transferId, approverId) => {
+        const { transfers, currentUser } = get();
         set({
           transfers: transfers.map(t =>
-            t.id === transferId ? { ...t, status: 'approved' } : t
+            t.id === transferId ? {
+              ...t,
+              status: 'approved',
+              approvedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+              approvedBy: approverId || currentUser?.id,
+            } : t
           ),
         });
       },
 
-      rejectTransfer: (transferId) => {
-        const { transfers } = get();
+      rejectTransfer: (transferId, reason, rejectorId) => {
+        const { transfers, currentUser } = get();
         const transfer = transfers.find(t => t.id === transferId);
         if (transfer) {
           get().updateAsset(transfer.assetId, { status: 'in-use' });
         }
         set({
           transfers: transfers.map(t =>
-            t.id === transferId ? { ...t, status: 'rejected' } : t
+            t.id === transferId ? {
+              ...t,
+              status: 'rejected',
+              rejectReason: reason,
+              approvedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+              approvedBy: rejectorId || currentUser?.id,
+            } : t
           ),
         });
       },
@@ -398,7 +445,7 @@ const useAppStore = create<AppState>()(
       approveScrap: (scrapId, residualIncome) => {
         const { scraps, currentUser } = get();
         const scrap = scraps.find(s => s.id === scrapId);
-        if (!scrap) return;
+        if (!scrap) return undefined;
 
         const scrapDate = dayjs().format('YYYY-MM-DD');
         get().updateAsset(scrap.assetId, { status: 'scrapped', scrapDate });
@@ -415,6 +462,7 @@ const useAppStore = create<AppState>()(
               : s
           ),
         });
+        return get().createScrapVoucherFromScrap(scrapId);
       },
 
       rejectScrap: (scrapId) => {
@@ -424,6 +472,259 @@ const useAppStore = create<AppState>()(
             s.id === scrapId ? { ...s, status: 'rejected' } : s
           ),
         });
+      },
+
+      createDepreciationVoucher: (period, dimension) => {
+        const { depreciationVouchers, depreciationRecords, assets, categories, departments, currentUser } = get();
+        const existing = depreciationVouchers.find(v => v.period === period && v.summaryDimension === dimension);
+        if (existing) return existing;
+
+        const periodRecords = depreciationRecords.filter(r => r.period === period);
+        const entries: VoucherEntry[] = [];
+        let totalDebit = 0;
+        let totalCredit = 0;
+
+        if (dimension === 'category') {
+          const categoryMap = new Map<string, { categoryId: string; amount: number; count: number }>();
+          periodRecords.forEach(record => {
+            const asset = assets.find(a => a.id === record.assetId);
+            if (!asset) return;
+            const key = asset.categoryId;
+            const cur = categoryMap.get(key);
+            if (cur) {
+              cur.amount += record.monthlyDepreciation;
+              cur.count += 1;
+            } else {
+              categoryMap.set(key, { categoryId: key, amount: record.monthlyDepreciation, count: 1 });
+            }
+          });
+          categoryMap.forEach(({ categoryId, amount }) => {
+            const rounded = Math.round(amount * 100) / 100;
+            const cat = categories.find(c => c.id === categoryId);
+            entries.push({
+              summary: `计提${period}折旧 - ${cat?.name || categoryId}`,
+              accountCode: '6602',
+              accountName: '管理费用/制造费用-折旧费',
+              direction: 'debit',
+              amount: rounded,
+              dimension: cat?.name,
+            });
+            entries.push({
+              summary: `计提${period}折旧 - ${cat?.name || categoryId}`,
+              accountCode: '1602',
+              accountName: '累计折旧',
+              direction: 'credit',
+              amount: rounded,
+              dimension: cat?.name,
+            });
+            totalDebit += rounded;
+            totalCredit += rounded;
+          });
+        } else {
+          const deptMap = new Map<string, { deptId: string; amount: number; count: number }>();
+          periodRecords.forEach(record => {
+            const asset = assets.find(a => a.id === record.assetId);
+            if (!asset) return;
+            const key = asset.currentDepartmentId || 'unallocated';
+            const cur = deptMap.get(key);
+            if (cur) {
+              cur.amount += record.monthlyDepreciation;
+              cur.count += 1;
+            } else {
+              deptMap.set(key, { deptId: key, amount: record.monthlyDepreciation, count: 1 });
+            }
+          });
+          deptMap.forEach(({ deptId, amount }) => {
+            const rounded = Math.round(amount * 100) / 100;
+            const deptName = deptId === 'unallocated' ? '未分配' : departments.find(d => d.id === deptId)?.name || deptId;
+            entries.push({
+              summary: `计提${period}折旧 - ${deptName}`,
+              accountCode: '6602',
+              accountName: '管理费用/制造费用-折旧费',
+              direction: 'debit',
+              amount: rounded,
+              dimension: deptName,
+            });
+            entries.push({
+              summary: `计提${period}折旧 - ${deptName}`,
+              accountCode: '1602',
+              accountName: '累计折旧',
+              direction: 'credit',
+              amount: rounded,
+              dimension: deptName,
+            });
+            totalDebit += rounded;
+            totalCredit += rounded;
+          });
+        }
+
+        const voucher: DepreciationVoucher = {
+          id: generateId(),
+          voucherNo: `DPR-${period}-${dimension === 'category' ? 'C' : 'D'}-${String(depreciationVouchers.length + 1).padStart(4, '0')}`,
+          period,
+          type: 'depreciation',
+          summaryDimension: dimension,
+          status: 'draft',
+          entries,
+          totalDebit: Math.round(totalDebit * 100) / 100,
+          totalCredit: Math.round(totalCredit * 100) / 100,
+          assetCount: periodRecords.length,
+          createdAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+          createdBy: currentUser?.id || '',
+        };
+        set({ depreciationVouchers: [...depreciationVouchers, voucher] });
+        return voucher;
+      },
+
+      getDepreciationVoucherByPeriod: (period) => {
+        return get().depreciationVouchers.find(v => v.period === period);
+      },
+
+      createScrapVoucherFromScrap: (scrapId) => {
+        const { scrapVouchers, scraps, assets, currentUser } = get();
+        const scrap = scraps.find(s => s.id === scrapId);
+        if (!scrap) return undefined;
+
+        const existing = scrapVouchers.find(v => v.scrapRecordId === scrapId);
+        if (existing) return existing;
+
+        const asset = assets.find(a => a.id === scrap.assetId);
+        if (!asset) return undefined;
+
+        const originalValue = asset.originalValue;
+        const accumulatedDep = asset.accumulatedDepreciation;
+        const netValue = Math.round((originalValue - accumulatedDep) * 100) / 100;
+        const residualIncome = scrap.residualIncome || 0;
+        const gainLoss = Math.round((residualIncome - netValue) * 100) / 100;
+
+        const entries: VoucherEntry[] = [];
+        let totalDebit = 0;
+        let totalCredit = 0;
+
+        entries.push({
+          summary: `结转${asset.assetNo} ${asset.name} 报废 - 累计折旧冲销`,
+          accountCode: '1602',
+          accountName: '累计折旧',
+          direction: 'debit',
+          amount: accumulatedDep,
+        });
+        totalDebit += accumulatedDep;
+
+        entries.push({
+          summary: `结转${asset.assetNo} ${asset.name} 报废 - 资产原值转出`,
+          accountCode: '1601',
+          accountName: '固定资产',
+          direction: 'credit',
+          amount: originalValue,
+        });
+        totalCredit += originalValue;
+
+        if (residualIncome > 0) {
+          entries.push({
+            summary: `${asset.assetNo} ${asset.name} 报废残值收入`,
+            accountCode: '1001',
+            accountName: '银行存款/库存现金',
+            direction: 'debit',
+            amount: residualIncome,
+          });
+          totalDebit += residualIncome;
+        }
+
+        if (gainLoss >= 0) {
+          entries.push({
+            summary: `${asset.assetNo} ${asset.name} 报废收益`,
+            accountCode: '6301',
+            accountName: '营业外收入',
+            direction: 'credit',
+            amount: gainLoss,
+          });
+          totalCredit += gainLoss;
+        } else {
+          entries.push({
+            summary: `${asset.assetNo} ${asset.name} 报废损失`,
+            accountCode: '6711',
+            accountName: '营业外支出',
+            direction: 'debit',
+            amount: Math.abs(gainLoss),
+          });
+          totalDebit += Math.abs(gainLoss);
+        }
+
+        const period = dayjs(scrap.approvedAt || scrap.applyDate).format('YYYY-MM');
+
+        const voucher: ScrapVoucher = {
+          id: generateId(),
+          voucherNo: `SCR-${period}-${String(scrapVouchers.length + 1).padStart(4, '0')}`,
+          period,
+          type: 'scrap',
+          status: 'draft',
+          assetId: asset.id,
+          assetNo: asset.assetNo,
+          assetName: asset.name,
+          scrapRecordId: scrap.id,
+          originalValue,
+          accumulatedDepreciation: accumulatedDep,
+          netValue,
+          residualIncome,
+          gainLoss,
+          entries,
+          totalDebit: Math.round(totalDebit * 100) / 100,
+          totalCredit: Math.round(totalCredit * 100) / 100,
+          createdAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+          createdBy: currentUser?.id || '',
+        };
+
+        set({ scrapVouchers: [...scrapVouchers, voucher] });
+        return voucher;
+      },
+
+      confirmVoucher: (voucherId, voucherType, confirmerId) => {
+        const { depreciationVouchers, scrapVouchers, currentUser } = get();
+        const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
+        const confirmer = confirmerId || currentUser?.id || '';
+
+        if (voucherType === 'depreciation') {
+          set({
+            depreciationVouchers: depreciationVouchers.map(v =>
+              v.id === voucherId ? { ...v, status: 'posted', postedAt: now, postedBy: confirmer } : v
+            ),
+          });
+        } else {
+          set({
+            scrapVouchers: scrapVouchers.map(v =>
+              v.id === voucherId ? { ...v, status: 'posted', postedAt: now, postedBy: confirmer } : v
+            ),
+          });
+        }
+      },
+
+      revokeVoucher: (voucherId, voucherType, revokerId) => {
+        const { depreciationVouchers, scrapVouchers, currentUser } = get();
+        const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
+        const revoker = revokerId || currentUser?.id || '';
+
+        if (voucherType === 'depreciation') {
+          set({
+            depreciationVouchers: depreciationVouchers.map(v =>
+              v.id === voucherId ? { ...v, status: 'revoked', revokedAt: now, revokedBy: revoker } : v
+            ),
+          });
+        } else {
+          set({
+            scrapVouchers: scrapVouchers.map(v =>
+              v.id === voucherId ? { ...v, status: 'revoked', revokedAt: now, revokedBy: revoker } : v
+            ),
+          });
+        }
+      },
+
+      getAllVouchers: () => {
+        const { depreciationVouchers, scrapVouchers } = get();
+        const all: FinanceVoucher[] = [
+          ...depreciationVouchers,
+          ...scrapVouchers,
+        ];
+        return all.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
       },
 
       createInventoryPlan: (name, startDate, endDate, createdBy, scopeDepartmentId, scopeLocation) => {

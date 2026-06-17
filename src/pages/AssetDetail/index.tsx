@@ -57,7 +57,8 @@ const { Option } = Select;
 interface OwnershipRecord {
   key: string;
   time: string;
-  type: 'create' | 'allocate' | 'transfer' | 'scrap';
+  type: 'create' | 'allocate' | 'return' | 'transfer' | 'scrap';
+  actionType: '分配' | '退回' | '调拨' | '报废';
   fromDepartment: string;
   fromUser: string;
   toDepartment: string;
@@ -138,14 +139,26 @@ const AssetDetail = () => {
       .forEach((alloc) => {
         const user = users.find((u) => u.id === alloc.userId);
         const dept = departments.find((d) => d.id === alloc.departmentId);
-        events.push({
-          key: `alloc-${alloc.id}`,
-          time: alloc.allocationDate,
-          title: '资产分配',
-          description: `分配到 ${dept?.name} - ${user?.name}，状态：${ALLOCATION_STATUS[alloc.status].label}`,
-          color: ALLOCATION_STATUS[alloc.status].color,
-          icon: <SendOutlined />,
-        });
+        const isReturn = alloc.status === 'returned' || alloc.type === 'return';
+        if (isReturn) {
+          events.push({
+            key: `alloc-${alloc.id}`,
+            time: alloc.returnedAt || alloc.allocationDate,
+            title: '资产退回',
+            description: `从 ${dept?.name} - ${user?.name} 退回至在库，状态：${ALLOCATION_STATUS[alloc.status].label}`,
+            color: ALLOCATION_STATUS[alloc.status].color,
+            icon: <InboxOutlined />,
+          });
+        } else {
+          events.push({
+            key: `alloc-${alloc.id}`,
+            time: alloc.allocationDate,
+            title: '资产分配',
+            description: `分配到 ${dept?.name} - ${user?.name}，状态：${ALLOCATION_STATUS[alloc.status].label}`,
+            color: ALLOCATION_STATUS[alloc.status].color,
+            icon: <SendOutlined />,
+          });
+        }
       });
 
     transfers
@@ -155,11 +168,21 @@ const AssetDetail = () => {
         const fromDept = departments.find((d) => d.id === transfer.fromDepartmentId);
         const toUser = users.find((u) => u.id === transfer.toUserId);
         const toDept = departments.find((d) => d.id === transfer.toDepartmentId);
+        const approvedByUser = transfer.approvedBy ? users.find((u) => u.id === transfer.approvedBy) : undefined;
+        let desc = `${fromUser?.name || '-'}/${fromDept?.name || '-'} → ${toUser?.name || '-'}/${toDept?.name || '-'}，原因：${transfer.reason || '无'}，状态：${TRANSFER_STATUS[transfer.status].label}`;
+        if (transfer.status === 'rejected' && transfer.rejectReason) {
+          desc += `，拒绝原因：${transfer.rejectReason}`;
+          if (approvedByUser && transfer.approvedAt) {
+            desc += `（${approvedByUser.name} 于 ${formatDate(transfer.approvedAt)} 拒绝）`;
+          }
+        } else if ((transfer.status === 'approved' || transfer.status === 'confirmed') && approvedByUser && transfer.approvedAt) {
+          desc += `（审核人：${approvedByUser.name}，审核时间：${formatDate(transfer.approvedAt)}）`;
+        }
         events.push({
           key: `transfer-${transfer.id}`,
           time: transfer.applyDate,
           title: '资产调拨',
-          description: `${fromUser?.name || '-'}/${fromDept?.name || '-'} → ${toUser?.name || '-'}/${toDept?.name || '-'}，原因：${transfer.reason || '无'}，状态：${TRANSFER_STATUS[transfer.status].label}`,
+          description: desc,
           color: TRANSFER_STATUS[transfer.status].color,
           icon: <SwapOutlined />,
         });
@@ -191,31 +214,53 @@ const AssetDetail = () => {
       key: 'create',
       time: asset.createdAt,
       type: 'create',
+      actionType: '分配',
       fromDepartment: '-',
       fromUser: '-',
       toDepartment: '在库',
-      toUser: '-',
+      toUser: '未分配',
       description: '资产入库',
       status: ASSET_STATUS['in-stock'].label,
     });
 
     allocations
       .filter((a) => a.assetId === id)
-      .sort((a, b) => new Date(a.allocationDate).getTime() - new Date(b.allocationDate).getTime())
+      .sort((a, b) => {
+        const timeA = (a.status === 'returned' || a.type === 'return') ? (a.returnedAt || a.allocationDate) : a.allocationDate;
+        const timeB = (b.status === 'returned' || b.type === 'return') ? (b.returnedAt || b.allocationDate) : b.allocationDate;
+        return new Date(timeA).getTime() - new Date(timeB).getTime();
+      })
       .forEach((alloc) => {
         const user = users.find((u) => u.id === alloc.userId);
         const dept = departments.find((d) => d.id === alloc.departmentId);
-        records.push({
-          key: `alloc-${alloc.id}`,
-          time: alloc.allocationDate,
-          type: 'allocate',
-          fromDepartment: records[records.length - 1]?.toDepartment || '-',
-          fromUser: records[records.length - 1]?.toUser || '-',
-          toDepartment: dept?.name || '-',
-          toUser: user?.name || '-',
-          description: '资产分配领用',
-          status: ALLOCATION_STATUS[alloc.status].label,
-        });
+        const isReturn = alloc.status === 'returned' || alloc.type === 'return';
+        if (isReturn) {
+          records.push({
+            key: `alloc-return-${alloc.id}`,
+            time: alloc.returnedAt || alloc.allocationDate,
+            type: 'return',
+            actionType: '退回',
+            fromDepartment: dept?.name || '-',
+            fromUser: user?.name || '-',
+            toDepartment: '在库',
+            toUser: '未分配',
+            description: '资产退回至在库',
+            status: ALLOCATION_STATUS[alloc.status].label,
+          });
+        } else {
+          records.push({
+            key: `alloc-${alloc.id}`,
+            time: alloc.allocationDate,
+            type: 'allocate',
+            actionType: '分配',
+            fromDepartment: records[records.length - 1]?.toDepartment || '-',
+            fromUser: records[records.length - 1]?.toUser || '-',
+            toDepartment: dept?.name || '-',
+            toUser: user?.name || '-',
+            description: '资产分配领用',
+            status: ALLOCATION_STATUS[alloc.status].label,
+          });
+        }
       });
 
     transfers
@@ -230,6 +275,7 @@ const AssetDetail = () => {
           key: `transfer-${transfer.id}`,
           time: transfer.applyDate,
           type: 'transfer',
+          actionType: '调拨',
           fromDepartment: fromDept?.name || '-',
           fromUser: fromUser?.name || '-',
           toDepartment: toDept?.name || '-',
@@ -247,6 +293,7 @@ const AssetDetail = () => {
           key: `scrap-${scrap.id}`,
           time: scrap.applyDate,
           type: 'scrap',
+          actionType: '报废',
           fromDepartment: records[records.length - 1]?.toDepartment || '-',
           fromUser: records[records.length - 1]?.toUser || '-',
           toDepartment: '已报废',
@@ -317,6 +364,7 @@ const AssetDetail = () => {
         const config: Record<OwnershipRecord['type'], { label: string; color: string; icon: React.ReactNode }> = {
           create: { label: '入库', color: 'green', icon: <InboxOutlined /> },
           allocate: { label: '分配', color: 'blue', icon: <UserOutlined /> },
+          return: { label: '退回', color: 'geekblue', icon: <InboxOutlined /> },
           transfer: { label: '调拨', color: 'orange', icon: <SwapOutlined /> },
           scrap: { label: '报废', color: 'red', icon: <StopOutlined /> },
         };
@@ -442,7 +490,8 @@ const AssetDetail = () => {
     if (!asset) return;
     const exportData = ownershipHistory.map((item) => ({
       变更时间: formatDate(item.time),
-      变更类型: item.type === 'create' ? '入库' : item.type === 'allocate' ? '分配' : item.type === 'transfer' ? '调拨' : '报废',
+      变更类型: item.type === 'create' ? '入库' : item.type === 'allocate' ? '分配' : item.type === 'return' ? '退回' : item.type === 'transfer' ? '调拨' : '报废',
+      动作类型: item.actionType,
       原使用人: item.fromUser,
       原部门: item.fromDepartment,
       新使用人: item.toUser,

@@ -125,6 +125,7 @@ export const mockAllocations: AllocationRecord[] = [
     allocationDate: dayjs().subtract(12, 'month').format('YYYY-MM-DD'),
     confirmedAt: dayjs().subtract(12, 'month').add(1, 'day').format('YYYY-MM-DD'),
     status: 'confirmed',
+    type: 'allocate',
   },
   {
     id: 'alloc-2',
@@ -134,6 +135,7 @@ export const mockAllocations: AllocationRecord[] = [
     allocationDate: dayjs().subtract(6, 'month').format('YYYY-MM-DD'),
     confirmedAt: dayjs().subtract(6, 'month').add(1, 'day').format('YYYY-MM-DD'),
     status: 'confirmed',
+    type: 'allocate',
   },
   {
     id: 'alloc-3',
@@ -143,6 +145,7 @@ export const mockAllocations: AllocationRecord[] = [
     allocationDate: dayjs().subtract(18, 'month').format('YYYY-MM-DD'),
     confirmedAt: dayjs().subtract(18, 'month').add(1, 'day').format('YYYY-MM-DD'),
     status: 'confirmed',
+    type: 'allocate',
   },
   {
     id: 'alloc-4',
@@ -152,6 +155,7 @@ export const mockAllocations: AllocationRecord[] = [
     allocationDate: dayjs().subtract(36, 'month').format('YYYY-MM-DD'),
     confirmedAt: dayjs().subtract(36, 'month').add(1, 'day').format('YYYY-MM-DD'),
     status: 'confirmed',
+    type: 'allocate',
   },
   {
     id: 'alloc-5',
@@ -161,6 +165,7 @@ export const mockAllocations: AllocationRecord[] = [
     allocationDate: dayjs().subtract(30, 'month').format('YYYY-MM-DD'),
     confirmedAt: dayjs().subtract(30, 'month').add(1, 'day').format('YYYY-MM-DD'),
     status: 'confirmed',
+    type: 'allocate',
   },
   {
     id: 'alloc-6',
@@ -169,6 +174,7 @@ export const mockAllocations: AllocationRecord[] = [
     departmentId: 'dept-7',
     allocationDate: dayjs().subtract(3, 'day').format('YYYY-MM-DD'),
     status: 'pending',
+    type: 'allocate',
   },
 ];
 

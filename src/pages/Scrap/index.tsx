@@ -25,12 +25,15 @@ import {
   CloseOutlined,
   DeleteOutlined,
   ReloadOutlined,
+  FileTextOutlined,
+  CheckCircleOutlined,
+  UnlockOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import useAppStore from '@/store';
 import { formatCurrency, formatDate } from '@/utils/helpers';
 import { SCRAP_STATUS, ASSET_STATUS } from '@/utils/constants';
-import type { ScrapRecord, ScrapStatus, Asset } from '@/types';
+import type { ScrapRecord, ScrapStatus, Asset, ScrapVoucher, VoucherStatus } from '@/types';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -41,6 +44,18 @@ interface TabItem {
   label: string;
 }
 
+const VOUCHER_STATUS_COLORS: Record<VoucherStatus, string> = {
+  draft: 'blue',
+  posted: 'green',
+  revoked: 'default',
+};
+
+const VOUCHER_STATUS_LABELS: Record<VoucherStatus, string> = {
+  draft: '草稿',
+  posted: '已入账',
+  revoked: '已撤回',
+};
+
 const ScrapPage = () => {
   const {
     scraps,
@@ -50,6 +65,9 @@ const ScrapPage = () => {
     createScrap,
     approveScrap,
     rejectScrap,
+    scrapVouchers,
+    confirmVoucher,
+    revokeVoucher,
   } = useAppStore();
 
   const [activeTab, setActiveTab] = useState<ScrapStatus>('pending');
@@ -58,7 +76,10 @@ const ScrapPage = () => {
   const [createModalVisible, setCreateModalVisible] = useState(false);
   const [viewModalVisible, setViewModalVisible] = useState(false);
   const [approveModalVisible, setApproveModalVisible] = useState(false);
+  const [voucherModalVisible, setVoucherModalVisible] = useState(false);
   const [currentScrap, setCurrentScrap] = useState<ScrapRecord | null>(null);
+  const [currentVoucher, setCurrentVoucher] = useState<ScrapVoucher | null>(null);
+  const [, setRefreshKey] = useState(0);
   const [createForm] = Form.useForm();
   const [approveForm] = Form.useForm();
 
@@ -67,6 +88,10 @@ const ScrapPage = () => {
     { key: 'approved', label: '已批准' },
     { key: 'rejected', label: '已拒绝' },
   ];
+
+  const getScrapVoucher = (scrapRecordId: string): ScrapVoucher | undefined => {
+    return scrapVouchers.find((v) => v.scrapRecordId === scrapRecordId);
+  };
 
   const filteredScraps = useMemo(() => {
     return scraps.filter((scrap) => {
@@ -121,11 +146,16 @@ const ScrapPage = () => {
     approveForm.validateFields().then((values) => {
       if (!currentScrap) return;
       try {
-        approveScrap(currentScrap.id, values.residualIncome);
+        const voucher = approveScrap(currentScrap.id, values.residualIncome);
         message.success('审核通过');
         setApproveModalVisible(false);
         approveForm.resetFields();
         setCurrentScrap(null);
+        setRefreshKey((k) => k + 1);
+        if (voucher) {
+          setCurrentVoucher(voucher);
+          setVoucherModalVisible(true);
+        }
       } catch (error) {
         message.error('操作失败，请重试');
       }
@@ -150,6 +180,43 @@ const ScrapPage = () => {
     setCurrentScrap(scrap);
     approveForm.setFieldsValue({ residualIncome: 0 });
     setApproveModalVisible(true);
+  };
+
+  const handleViewVoucher = (voucher: ScrapVoucher) => {
+    setCurrentVoucher(voucher);
+    setVoucherModalVisible(true);
+  };
+
+  const handleConfirmVoucher = () => {
+    if (!currentVoucher) return;
+    Modal.confirm({
+      title: '确认入账',
+      content: `确定要将凭证 ${currentVoucher.voucherNo} 确认入账吗？入账后可撤回。`,
+      onOk: () => {
+        confirmVoucher(currentVoucher.id, 'scrap');
+        setRefreshKey((k) => k + 1);
+        const store = useAppStore.getState();
+        const updated = store.scrapVouchers.find((v: ScrapVoucher) => v.id === currentVoucher.id);
+        setCurrentVoucher(updated || null);
+        message.success('凭证已确认入账');
+      },
+    });
+  };
+
+  const handleRevokeVoucher = () => {
+    if (!currentVoucher) return;
+    Modal.confirm({
+      title: '撤回凭证',
+      content: `确定要撤回凭证 ${currentVoucher.voucherNo} 吗？撤回后可重新确认入账。`,
+      onOk: () => {
+        revokeVoucher(currentVoucher.id, 'scrap');
+        setRefreshKey((k) => k + 1);
+        const store = useAppStore.getState();
+        const updated = store.scrapVouchers.find((v: ScrapVoucher) => v.id === currentVoucher.id);
+        setCurrentVoucher(updated || null);
+        message.success('凭证已撤回');
+      },
+    });
   };
 
   const handleReset = () => {
@@ -186,6 +253,23 @@ const ScrapPage = () => {
           </Button>
         </Popconfirm>
       );
+    }
+
+    if (record.status === 'approved') {
+      const voucher = getScrapVoucher(record.id);
+      if (voucher) {
+        buttons.push(
+          <Button
+            key="voucher"
+            type="link"
+            size="small"
+            icon={<FileTextOutlined />}
+            onClick={() => handleViewVoucher(voucher)}
+          >
+            查看凭证
+          </Button>
+        );
+      }
     }
 
     buttons.push(
@@ -274,6 +358,21 @@ const ScrapPage = () => {
       },
     },
     {
+      title: '凭证状态',
+      key: 'voucherStatus',
+      width: 100,
+      render: (_, record) => {
+        if (record.status !== 'approved') return '-';
+        const voucher = getScrapVoucher(record.id);
+        if (!voucher) return <Tag color="orange">未生成</Tag>;
+        return (
+          <Tag color={VOUCHER_STATUS_COLORS[voucher.status]}>
+            {VOUCHER_STATUS_LABELS[voucher.status]}
+          </Tag>
+        );
+      },
+    },
+    {
       title: '批准人',
       dataIndex: 'approvedBy',
       key: 'approvedBy',
@@ -293,11 +392,41 @@ const ScrapPage = () => {
     {
       title: '操作',
       key: 'actions',
-      width: 200,
+      width: 240,
       fixed: 'right',
       render: (_, record) => <Space wrap size={0}>{getActionButtons(record)}</Space>,
     },
   ];
+
+  const getVoucherFooter = () => {
+    if (!currentVoucher) return null;
+    const buttons = [];
+    buttons.push(
+      <Button key="close" onClick={() => setVoucherModalVisible(false)}>
+        关闭
+      </Button>
+    );
+    if (currentVoucher.status === 'draft') {
+      buttons.push(
+        <Button key="confirm" type="primary" icon={<CheckCircleOutlined />} onClick={handleConfirmVoucher}>
+          确认入账
+        </Button>
+      );
+    }
+    if (currentVoucher.status === 'posted') {
+      buttons.push(
+        <Popconfirm
+          key="revoke"
+          title="确定要撤回此凭证吗？"
+          description="撤回后将变为草稿状态，可重新修改入账"
+          onConfirm={handleRevokeVoucher}
+        >
+          <Button icon={<UnlockOutlined />}>撤回凭证</Button>
+        </Popconfirm>
+      );
+    }
+    return buttons;
+  };
 
   return (
     <div className="p-6">
@@ -371,7 +500,7 @@ const ScrapPage = () => {
             showQuickJumper: true,
             showTotal: (total) => `共 ${total} 条记录`,
           }}
-          scroll={{ x: 1400 }}
+          scroll={{ x: 1500 }}
           size="middle"
         />
       </Card>
@@ -456,6 +585,23 @@ const ScrapPage = () => {
                   </Descriptions.Item>
                   <Descriptions.Item label="残值收入">
                     {currentScrap.residualIncome !== undefined ? formatCurrency(currentScrap.residualIncome) : '-'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="凭证">
+                    {(() => {
+                      const voucher = getScrapVoucher(currentScrap.id);
+                      if (!voucher) return <Tag color="orange">未生成</Tag>;
+                      return (
+                        <Space>
+                          <span className="font-mono">{voucher.voucherNo}</span>
+                          <Tag color={VOUCHER_STATUS_COLORS[voucher.status]}>
+                            {VOUCHER_STATUS_LABELS[voucher.status]}
+                          </Tag>
+                          <Button type="link" size="small" icon={<FileTextOutlined />} onClick={() => handleViewVoucher(voucher)}>
+                            查看
+                          </Button>
+                        </Space>
+                      );
+                    })()}
                   </Descriptions.Item>
                 </>
               )}
@@ -542,6 +688,119 @@ const ScrapPage = () => {
               />
             </Form.Item>
           </Form>
+        )}
+      </Modal>
+
+      <Modal
+        title="报废凭证详情"
+        open={voucherModalVisible}
+        onCancel={() => {
+          setVoucherModalVisible(false);
+          setCurrentVoucher(null);
+        }}
+        footer={getVoucherFooter()}
+        width={850}
+        destroyOnClose
+      >
+        {currentVoucher && (
+          <>
+            <Descriptions column={2} bordered size="small" className="mb-4">
+              <Descriptions.Item label="凭证编号">
+                <span className="font-mono">{currentVoucher.voucherNo}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="凭证状态">
+                <Tag color={VOUCHER_STATUS_COLORS[currentVoucher.status]}>
+                  {VOUCHER_STATUS_LABELS[currentVoucher.status]}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="凭证类型">报废凭证</Descriptions.Item>
+              <Descriptions.Item label="期间">{currentVoucher.period}</Descriptions.Item>
+              <Descriptions.Item label="创建人">{getUserName(currentVoucher.createdBy)}</Descriptions.Item>
+              <Descriptions.Item label="创建时间">{currentVoucher.createdAt}</Descriptions.Item>
+              {currentVoucher.postedAt && (
+                <>
+                  <Descriptions.Item label="入账人">{getUserName(currentVoucher.postedBy)}</Descriptions.Item>
+                  <Descriptions.Item label="入账时间">{currentVoucher.postedAt}</Descriptions.Item>
+                </>
+              )}
+              {currentVoucher.revokedAt && (
+                <>
+                  <Descriptions.Item label="撤回人">{getUserName(currentVoucher.revokedBy)}</Descriptions.Item>
+                  <Descriptions.Item label="撤回时间">{currentVoucher.revokedAt}</Descriptions.Item>
+                </>
+              )}
+            </Descriptions>
+
+            <Descriptions title="报废资产信息" column={2} bordered size="small" className="mb-4">
+              <Descriptions.Item label="资产编号">
+                <span className="font-mono">{currentVoucher.assetNo}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="资产名称">{currentVoucher.assetName}</Descriptions.Item>
+              <Descriptions.Item label="原值">
+                <span className="text-blue-600 font-medium">{formatCurrency(currentVoucher.originalValue)}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="累计折旧">
+                <span className="text-purple-600 font-medium">{formatCurrency(currentVoucher.accumulatedDepreciation)}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="净值">
+                <span className="text-green-600 font-medium">{formatCurrency(currentVoucher.netValue)}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="残值收入">
+                <span className="text-orange-600 font-medium">{formatCurrency(currentVoucher.residualIncome)}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="报废损益" span={2}>
+                <span className={currentVoucher.gainLoss >= 0 ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>
+                  {currentVoucher.gainLoss >= 0 ? '收益' : '损失'}: {formatCurrency(Math.abs(currentVoucher.gainLoss))}
+                </span>
+              </Descriptions.Item>
+            </Descriptions>
+
+            <div className="mb-2 font-medium text-gray-700">借贷明细</div>
+            <Table
+              size="small"
+              dataSource={currentVoucher.entries}
+              pagination={false}
+              rowKey={(r, i) => `${r.accountCode}-${r.direction}-${i}`}
+              columns={[
+                { title: '摘要', dataIndex: 'summary', key: 'summary', width: 280, ellipsis: true },
+                {
+                  title: '借方',
+                  key: 'debit',
+                  width: 260,
+                  render: (_, record) => record.direction === 'debit' ? (
+                    <div>
+                      <div className="text-xs text-gray-500">{record.accountCode} {record.accountName}</div>
+                      <div className="font-medium text-orange-600">{formatCurrency(record.amount)}</div>
+                    </div>
+                  ) : <span className="text-gray-300">-</span>,
+                },
+                {
+                  title: '贷方',
+                  key: 'credit',
+                  width: 260,
+                  render: (_, record) => record.direction === 'credit' ? (
+                    <div>
+                      <div className="text-xs text-gray-500">{record.accountCode} {record.accountName}</div>
+                      <div className="font-medium text-green-600">{formatCurrency(record.amount)}</div>
+                    </div>
+                  ) : <span className="text-gray-300">-</span>,
+                },
+              ]}
+              summary={() => {
+                const debit = currentVoucher.entries.filter(e => e.direction === 'debit').reduce((s, e) => s + e.amount, 0);
+                const credit = currentVoucher.entries.filter(e => e.direction === 'credit').reduce((s, e) => s + e.amount, 0);
+                return (
+                  <>
+                    <Table.Summary.Row>
+                      <Table.Summary.Cell index={0} align="right"><b>合计：</b></Table.Summary.Cell>
+                      <Table.Summary.Cell index={1}><b className="text-orange-600">{formatCurrency(Math.round(debit * 100) / 100)}</b></Table.Summary.Cell>
+                      <Table.Summary.Cell index={2}><b className="text-green-600">{formatCurrency(Math.round(credit * 100) / 100)}</b></Table.Summary.Cell>
+                    </Table.Summary.Row>
+                  </>
+                );
+              }}
+            />
+          </>
         )}
       </Modal>
     </div>

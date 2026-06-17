@@ -32,11 +32,12 @@ const menuItems: MenuItem[] = [
   { key: '/dashboard', label: '首页仪表盘', icon: <DashboardOutlined /> },
   { key: '/assets', label: '资产管理', icon: <AppstoreOutlined /> },
   { key: '/depreciation', label: '折旧台账', icon: <CalculatorOutlined />, roles: ['admin', 'finance'] },
+  { key: '/finance-voucher', label: '财务凭证', icon: <FileTextOutlined />, roles: ['admin', 'finance'] },
   { key: '/allocation', label: '资产分配', icon: <UserSwitchOutlined />, roles: ['admin', 'asset-manager'] },
   { key: '/transfer', label: '调拨管理', icon: <SwapOutlined /> },
   { key: '/scrap', label: '报废管理', icon: <DeleteOutlined /> },
   { key: '/inventory', label: '盘点管理', icon: <BarcodeOutlined />, roles: ['admin', 'asset-manager'] },
-  { key: '/reports', label: '财务报表', icon: <FileTextOutlined />, roles: ['admin', 'finance'] },
+  { key: '/reports', label: '财务报表', icon: <BarcodeOutlined />, roles: ['admin', 'finance'] },
   { key: '/settings', label: '系统设置', icon: <SettingOutlined />, roles: ['admin'] },
 ];
 

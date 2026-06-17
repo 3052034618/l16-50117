@@ -12,6 +12,7 @@ import Transfer from './pages/Transfer';
 import Scrap from './pages/Scrap';
 import Inventory from './pages/Inventory';
 import Reports from './pages/Reports';
+import FinanceVoucher from './pages/FinanceVoucher';
 import Settings from './pages/Settings';
 import Login from './pages/Login';
 import useAppStore from './store';
@@ -62,6 +63,7 @@ function App() {
               <Route path="scrap" element={<Scrap />} />
               <Route path="inventory" element={<Inventory />} />
               <Route path="reports" element={<Reports />} />
+              <Route path="finance-voucher" element={<FinanceVoucher />} />
               <Route path="settings" element={<Settings />} />
             </Route>
             <Route path="*" element={<Navigate to="/dashboard" replace />} />

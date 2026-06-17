@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import {
   Card,
   Table,
@@ -14,6 +14,9 @@ import {
   Popconfirm,
   Tag,
   Alert,
+  Modal,
+  Descriptions,
+  Segmented,
 } from 'antd';
 import {
   CalculatorOutlined,
@@ -36,7 +39,7 @@ import type { EChartsOption } from 'echarts';
 import useAppStore from '@/store';
 import { formatCurrency, getCurrentPeriod, getMonthList, downloadJson, formatDate } from '@/utils/helpers';
 import { DEPRECIATION_METHODS } from '@/utils/constants';
-import type { Asset, DepreciationMethod, DepreciationRecord, PostedPeriod } from '@/types';
+import type { Asset, DepreciationMethod, DepreciationRecord, PostedPeriod, DepreciationVoucher, VoucherEntry } from '@/types';
 
 const { Option } = Select;
 
@@ -74,12 +77,18 @@ const Depreciation = () => {
     isPeriodPosted,
     users,
     departments,
+    createDepreciationVoucher,
+    confirmVoucher,
+    revokeVoucher,
   } = useAppStore();
 
   const [selectedPeriod, setSelectedPeriod] = useState<string>(getCurrentPeriod());
   const [filterCategory, setFilterCategory] = useState<string>();
   const [filterMethod, setFilterMethod] = useState<DepreciationMethod>();
   const [activeTab, setActiveTab] = useState<string>('detail');
+  const [voucherDimension, setVoucherDimension] = useState<'category' | 'department'>('category');
+  const [currentVoucher, setCurrentVoucher] = useState<DepreciationVoucher | null>(null);
+  const [, setRefreshKey] = useState(0);
 
   const currentPeriod = getCurrentPeriod();
 
@@ -329,11 +338,75 @@ const Depreciation = () => {
     }
     postDepreciationPeriod(selectedPeriod);
     message.success(`${selectedPeriod} 期间已结账`);
+    setRefreshKey(k => k + 1);
   };
 
   const handleUnpostPeriod = () => {
     unpostDepreciationPeriod(selectedPeriod);
     message.success(`${selectedPeriod} 期间已反结账`);
+    setCurrentVoucher(null);
+    setRefreshKey(k => k + 1);
+  };
+
+  useEffect(() => {
+    if (!periodPosted) {
+      setCurrentVoucher(null);
+      return;
+    }
+    const store = useAppStore.getState();
+    const existing = store.depreciationVouchers.find(
+      (v: DepreciationVoucher) => v.period === selectedPeriod && v.summaryDimension === voucherDimension
+    );
+    setCurrentVoucher(existing || null);
+  }, [selectedPeriod, periodPosted, voucherDimension]);
+
+  const handleCreateVoucher = () => {
+    const voucher = createDepreciationVoucher(selectedPeriod, voucherDimension);
+    setCurrentVoucher(voucher);
+    message.success(`凭证草稿已生成：${voucher.voucherNo}`);
+  };
+
+  const handleConfirmVoucher = () => {
+    if (!currentVoucher) return;
+    Modal.confirm({
+      title: '确认入账',
+      content: `确定要将凭证 ${currentVoucher.voucherNo} 确认入账吗？入账后可撤回。`,
+      onOk: () => {
+        confirmVoucher(currentVoucher.id, 'depreciation');
+        setRefreshKey(k => k + 1);
+        const store = useAppStore.getState();
+        const updated = store.depreciationVouchers.find((v: DepreciationVoucher) => v.id === currentVoucher.id);
+        setCurrentVoucher(updated || null);
+        message.success('凭证已确认入账');
+      },
+    });
+  };
+
+  const handleRevokeVoucher = () => {
+    if (!currentVoucher) return;
+    Modal.confirm({
+      title: '撤回凭证',
+      content: `确定要撤回凭证 ${currentVoucher.voucherNo} 吗？撤回后可重新确认入账。`,
+      onOk: () => {
+        revokeVoucher(currentVoucher.id, 'depreciation');
+        setRefreshKey(k => k + 1);
+        const store = useAppStore.getState();
+        const updated = store.depreciationVouchers.find((v: DepreciationVoucher) => v.id === currentVoucher.id);
+        setCurrentVoucher(updated || null);
+        message.success('凭证已撤回');
+      },
+    });
+  };
+
+  const handleSwitchDimension = (dim: 'category' | 'department') => {
+    setVoucherDimension(dim);
+    if (periodPosted) {
+      const store = useAppStore.getState();
+      const existing = store.depreciationVouchers.find(
+        (v: DepreciationVoucher) => v.period === selectedPeriod && v.summaryDimension === dim
+      );
+      setCurrentVoucher(existing || null);
+    }
   };
 
   const handleExport = () => {
@@ -639,122 +712,147 @@ const Depreciation = () => {
         <Alert
           type="warning"
           showIcon
-          message="请先完成结账后查看折旧凭证"
+          message="请先完成结账后生成折旧凭证"
           description="凭证需结账后生成，确保本期折旧计提完成且数据不再变更。"
           className="my-4"
         />
       ) : (
         <div>
-          <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded text-sm">
-            <div className="flex items-center justify-between">
+          <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded">
+            <div className="flex items-center justify-between flex-wrap gap-3">
               <div>
                 <CheckCircleOutlined className="text-green-600 mr-2" />
-                <span className="text-green-800 font-medium">
-                  期间 {selectedPeriod} 已结账，折旧凭证已生成
+                <span className="font-medium">
+                  期间 {selectedPeriod} 已结账
                 </span>
+                {currentVoucher && (
+                  <Tag color={currentVoucher.status === 'posted' ? 'green' : currentVoucher.status === 'revoked' ? 'default' : 'blue'} className="ml-2">
+                    {currentVoucher.status === 'posted' ? '已入账' : currentVoucher.status === 'revoked' ? '已撤回' : '草稿'}
+                  </Tag>
+                )}
+                {!currentVoucher && <Tag color="orange" className="ml-2">未生成</Tag>}
               </div>
-              {postedPeriodInfo && (
-                <span className="text-gray-500 text-xs">
-                  制单人：{getUserName(postedPeriodInfo.postedBy)} | 制单时间：{postedPeriodInfo.postedAt}
-                </span>
-              )}
+              <Space className="flex-wrap">
+                <Segmented
+                  value={voucherDimension}
+                  onChange={(v) => handleSwitchDimension(v as 'category' | 'department')}
+                  options={[
+                    { label: <span><AppstoreOutlined /> 按资产类别</span>, value: 'category' },
+                    { label: <span><TeamOutlined /> 按使用部门</span>, value: 'department' },
+                  ]}
+                />
+                <Button
+                  icon={<FileTextOutlined />}
+                  onClick={handleCreateVoucher}
+                  disabled={!!currentVoucher && currentVoucher.status === 'posted'}
+                >
+                  {currentVoucher ? '重新生成草稿' : '生成凭证草稿'}
+                </Button>
+                {currentVoucher && currentVoucher.status === 'draft' && (
+                  <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleConfirmVoucher}>
+                    确认入账
+                  </Button>
+                )}
+                {currentVoucher && currentVoucher.status === 'posted' && (
+                  <Popconfirm
+                    title="确定要撤回此凭证吗？"
+                    description="撤回后将变为草稿状态，可重新修改入账"
+                    onConfirm={handleRevokeVoucher}
+                  >
+                    <Button icon={<UnlockOutlined />}>撤回凭证</Button>
+                  </Popconfirm>
+                )}
+                {currentVoucher && (
+                  <Button icon={<DownloadOutlined />} onClick={() => handleExportVoucher(voucherDimension)}>
+                    导出
+                  </Button>
+                )}
+              </Space>
             </div>
           </div>
-          <Tabs
-            defaultActiveKey="category"
-            items={[
-              {
-                key: 'category',
-                label: <span><AppstoreOutlined /> 按资产类别</span>,
-                children: (
-                  <div>
-                    <div className="mb-2 text-right">
-                      <Button size="small" icon={<DownloadOutlined />} onClick={() => handleExportVoucher('category')}>
-                        导出凭证
-                      </Button>
+
+          {currentVoucher && (
+            <Descriptions column={2} bordered size="small" className="mb-4">
+              <Descriptions.Item label="凭证编号">{currentVoucher.voucherNo}</Descriptions.Item>
+              <Descriptions.Item label="凭证状态">
+                <Tag color={currentVoucher.status === 'posted' ? 'green' : currentVoucher.status === 'revoked' ? 'default' : 'blue'}>
+                  {currentVoucher.status === 'posted' ? '已入账' : currentVoucher.status === 'revoked' ? '已撤回' : '草稿'}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="汇总维度">{voucherDimension === 'category' ? '按资产类别' : '按使用部门'}</Descriptions.Item>
+              <Descriptions.Item label="资产数量">{currentVoucher.assetCount} 项</Descriptions.Item>
+              <Descriptions.Item label="借方合计">{formatCurrency(currentVoucher.totalDebit)}</Descriptions.Item>
+              <Descriptions.Item label="贷方合计">{formatCurrency(currentVoucher.totalCredit)}</Descriptions.Item>
+              <Descriptions.Item label="创建人">{getUserName(currentVoucher.createdBy)}</Descriptions.Item>
+              <Descriptions.Item label="创建时间">{currentVoucher.createdAt}</Descriptions.Item>
+              {currentVoucher.postedAt && (
+                <>
+                  <Descriptions.Item label="入账人">{getUserName(currentVoucher.postedBy)}</Descriptions.Item>
+                  <Descriptions.Item label="入账时间">{currentVoucher.postedAt}</Descriptions.Item>
+                </>
+              )}
+              {currentVoucher.revokedAt && (
+                <>
+                  <Descriptions.Item label="撤回人">{getUserName(currentVoucher.revokedBy)}</Descriptions.Item>
+                  <Descriptions.Item label="撤回时间">{currentVoucher.revokedAt}</Descriptions.Item>
+                </>
+              )}
+            </Descriptions>
+          )}
+
+          {currentVoucher ? (
+            <Table
+              size="small"
+              dataSource={currentVoucher.entries}
+              pagination={false}
+              rowKey={(r, i) => `${r.accountCode}-${r.direction}-${i}`}
+              columns={[
+                { title: '摘要', dataIndex: 'summary', key: 'summary', width: 280, ellipsis: true },
+                {
+                  title: '借方',
+                  key: 'debit',
+                  width: 260,
+                  render: (_, record) => record.direction === 'debit' ? (
+                    <div>
+                      <div className="text-xs text-gray-500">{record.accountCode} {record.accountName}</div>
+                      <div className="font-medium text-orange-600">{formatCurrency(record.amount)}</div>
                     </div>
-                    <Table
-                      columns={categoryVoucherColumns}
-                      dataSource={categorySummaryData.filter((c) => c.monthlyDepreciationTotal > 0)}
-                      rowKey="categoryId"
-                      pagination={false}
-                      size="middle"
-                      summary={(pageData) => {
-                        let totalDebit = 0;
-                        let totalCount = 0;
-                        pageData.forEach(({ monthlyDepreciationTotal, assetCount }) => {
-                          totalDebit += monthlyDepreciationTotal;
-                          totalCount += assetCount;
-                        });
-                        return (
-                          <>
-                            <Table.Summary.Row>
-                              <Table.Summary.Cell index={0} colSpan={2}>
-                                <b>合计（共 {totalCount} 项资产）</b>
-                              </Table.Summary.Cell>
-                              <Table.Summary.Cell index={2} align="right">
-                                <b>{formatCurrency(Math.round(totalDebit * 100) / 100)}</b>
-                              </Table.Summary.Cell>
-                              <Table.Summary.Cell index={3} />
-                              <Table.Summary.Cell index={4} />
-                              <Table.Summary.Cell index={5} align="right">
-                                <b>{formatCurrency(Math.round(totalDebit * 100) / 100)}</b>
-                              </Table.Summary.Cell>
-                            </Table.Summary.Row>
-                          </>
-                        );
-                      }}
-                    />
-                  </div>
-                ),
-              },
-              {
-                key: 'department',
-                label: <span><TeamOutlined /> 按使用部门</span>,
-                children: (
-                  <div>
-                    <div className="mb-2 text-right">
-                      <Button size="small" icon={<DownloadOutlined />} onClick={() => handleExportVoucher('department')}>
-                        导出凭证
-                      </Button>
+                  ) : <span className="text-gray-300">-</span>,
+                },
+                {
+                  title: '贷方',
+                  key: 'credit',
+                  width: 260,
+                  render: (_, record) => record.direction === 'credit' ? (
+                    <div>
+                      <div className="text-xs text-gray-500">{record.accountCode} {record.accountName}</div>
+                      <div className="font-medium text-green-600">{formatCurrency(record.amount)}</div>
                     </div>
-                    <Table
-                      columns={departmentVoucherColumns}
-                      dataSource={departmentSummaryData}
-                      rowKey="departmentId"
-                      pagination={false}
-                      size="middle"
-                      summary={(pageData) => {
-                        let totalDebit = 0;
-                        let totalCount = 0;
-                        pageData.forEach(({ monthlyDepreciationTotal, assetCount }) => {
-                          totalDebit += monthlyDepreciationTotal;
-                          totalCount += assetCount;
-                        });
-                        return (
-                          <>
-                            <Table.Summary.Row>
-                              <Table.Summary.Cell index={0} colSpan={2}>
-                                <b>合计（共 {totalCount} 项资产）</b>
-                              </Table.Summary.Cell>
-                              <Table.Summary.Cell index={2} align="right">
-                                <b>{formatCurrency(Math.round(totalDebit * 100) / 100)}</b>
-                              </Table.Summary.Cell>
-                              <Table.Summary.Cell index={3} />
-                              <Table.Summary.Cell index={4} />
-                              <Table.Summary.Cell index={5} align="right">
-                                <b>{formatCurrency(Math.round(totalDebit * 100) / 100)}</b>
-                              </Table.Summary.Cell>
-                            </Table.Summary.Row>
-                          </>
-                        );
-                      }}
-                    />
-                  </div>
-                ),
-              },
-            ]}
-          />
+                  ) : <span className="text-gray-300">-</span>,
+                },
+              ]}
+              summary={() => {
+                const debit = currentVoucher.entries.filter(e => e.direction === 'debit').reduce((s, e) => s + e.amount, 0);
+                const credit = currentVoucher.entries.filter(e => e.direction === 'credit').reduce((s, e) => s + e.amount, 0);
+                return (
+                  <>
+                    <Table.Summary.Row>
+                      <Table.Summary.Cell index={0} align="right"><b>合计：</b></Table.Summary.Cell>
+                      <Table.Summary.Cell index={1}><b className="text-orange-600">{formatCurrency(Math.round(debit * 100) / 100)}</b></Table.Summary.Cell>
+                      <Table.Summary.Cell index={2}><b className="text-green-600">{formatCurrency(Math.round(credit * 100) / 100)}</b></Table.Summary.Cell>
+                    </Table.Summary.Row>
+                  </>
+                );
+              }}
+            />
+          ) : (
+            <Alert
+              type="info"
+              showIcon
+              message="尚未生成凭证"
+              description="请选择汇总维度后，点击「生成凭证草稿」创建凭证，然后确认入账。"
+            />
+          )}
         </div>
       ),
     },

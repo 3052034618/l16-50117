@@ -239,13 +239,11 @@ const TransferPage = () => {
       );
     }
 
-    if (record.status === 'confirmed' || record.status === 'rejected') {
-      buttons.push(
-        <Button key="view" type="link" size="small" icon={<EyeOutlined />} onClick={() => handleView(record)}>
-          详情
-        </Button>
-      );
-    }
+    buttons.push(
+      <Button key="view" type="link" size="small" icon={<EyeOutlined />} onClick={() => handleView(record)}>
+        详情
+      </Button>
+    );
 
     return buttons;
   };
@@ -548,13 +546,18 @@ const TransferPage = () => {
                   {TRANSFER_STATUS[currentTransfer.status].label}
                 </Tag>
               </Descriptions.Item>
+              {currentTransfer.approvedBy && (
+                <Descriptions.Item label="审核人">
+                  {getUserName(currentTransfer.approvedBy)}
+                </Descriptions.Item>
+              )}
               {currentTransfer.approvedAt && (
-                <Descriptions.Item label="审核日期">
+                <Descriptions.Item label="审核时间">
                   {formatDate(currentTransfer.approvedAt)}
                 </Descriptions.Item>
               )}
               {currentTransfer.confirmedAt && (
-                <Descriptions.Item label="确认日期">
+                <Descriptions.Item label="确认日期" span={2}>
                   {formatDate(currentTransfer.confirmedAt)}
                 </Descriptions.Item>
               )}
@@ -564,8 +567,8 @@ const TransferPage = () => {
                 </Descriptions.Item>
               )}
               {currentTransfer.rejectReason && (
-                <Descriptions.Item label="拒绝原因" span={2}>
-                  {currentTransfer.rejectReason}
+                <Descriptions.Item label="拒绝原因" span={2} className="bg-red-50">
+                  <span className="text-red-600">{currentTransfer.rejectReason}</span>
                 </Descriptions.Item>
               )}
             </Descriptions>
