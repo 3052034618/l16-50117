@@ -11,6 +11,9 @@ import {
   Statistic,
   Tabs,
   message,
+  Popconfirm,
+  Tag,
+  Alert,
 } from 'antd';
 import {
   CalculatorOutlined,
@@ -19,6 +22,9 @@ import {
   RiseOutlined,
   BarChartOutlined,
   AreaChartOutlined,
+  LockOutlined,
+  UnlockOutlined,
+  CheckCircleOutlined,
 } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import dayjs from 'dayjs';
@@ -27,10 +33,9 @@ import type { EChartsOption } from 'echarts';
 import useAppStore from '@/store';
 import { formatCurrency, getCurrentPeriod, getMonthList, downloadJson, formatDate } from '@/utils/helpers';
 import { DEPRECIATION_METHODS } from '@/utils/constants';
-import type { Asset, DepreciationMethod, DepreciationRecord } from '@/types';
+import type { Asset, DepreciationMethod, DepreciationRecord, PostedPeriod } from '@/types';
 
 const { Option } = Select;
-const { RangePicker } = DatePicker;
 
 interface DepreciationDetail extends Asset {
   monthlyDepreciation: number;
@@ -48,7 +53,18 @@ interface CategorySummary {
 }
 
 const Depreciation = () => {
-  const { assets, categories, depreciationRecords, calculateMonthlyDepreciation } = useAppStore();
+  const {
+    assets,
+    categories,
+    depreciationRecords,
+    postedPeriods,
+    calculateMonthlyDepreciation,
+    postDepreciationPeriod,
+    unpostDepreciationPeriod,
+    isPeriodPosted,
+    users,
+    departments,
+  } = useAppStore();
 
   const [selectedPeriod, setSelectedPeriod] = useState<string>(getCurrentPeriod());
   const [filterCategory, setFilterCategory] = useState<string>();
@@ -60,6 +76,19 @@ const Depreciation = () => {
   const getCategoryName = (categoryId: string) => {
     return categories.find((c) => c.id === categoryId)?.name || '-';
   };
+
+  const getUserName = (userId?: string) => {
+    if (!userId) return '-';
+    return users.find(u => u.id === userId)?.name || '-';
+  };
+
+  const periodPosted = useMemo(() => {
+    return isPeriodPosted(selectedPeriod);
+  }, [selectedPeriod, isPeriodPosted, postedPeriods]);
+
+  const postedPeriodInfo = useMemo((): PostedPeriod | undefined => {
+    return postedPeriods.find(p => p.period === selectedPeriod);
+  }, [postedPeriods, selectedPeriod]);
 
   const filteredAssets = useMemo(() => {
     return assets.filter((asset) => {
@@ -85,6 +114,12 @@ const Depreciation = () => {
     });
   }, [filteredAssets, periodDepreciationRecords, selectedPeriod]);
 
+  const uncalculatedAssets = useMemo(() => {
+    return filteredAssets.filter(
+      (asset) => !periodDepreciationRecords.some((r) => r.assetId === asset.id)
+    );
+  }, [filteredAssets, periodDepreciationRecords]);
+
   const stats = useMemo(() => {
     const monthlyTotal = periodDepreciationRecords.reduce((sum, r) => sum + r.monthlyDepreciation, 0);
     const accumulatedTotal = depreciationRecords.reduce((sum, r) => sum + r.monthlyDepreciation, 0);
@@ -98,8 +133,9 @@ const Depreciation = () => {
       accumulatedTotal: Math.round(accumulatedTotal * 100) / 100,
       netValueTotal: Math.round(netValueTotal * 100) / 100,
       calculatedCount,
+      uncalculatedCount: uncalculatedAssets.length,
     };
-  }, [periodDepreciationRecords, depreciationRecords, filteredAssets]);
+  }, [periodDepreciationRecords, depreciationRecords, filteredAssets, uncalculatedAssets]);
 
   const categorySummaryData = useMemo((): CategorySummary[] => {
     const summaryMap = new Map<string, CategorySummary>();
@@ -157,9 +193,7 @@ const Depreciation = () => {
       },
       tooltip: {
         trigger: 'axis',
-        axisPointer: {
-          type: 'cross',
-        },
+        axisPointer: { type: 'cross' },
         formatter: (params: unknown) => {
           const p = params as Array<{ axisValue: string; seriesName: string; value: number }>;
           let result = `${p[0].axisValue}<br/>`;
@@ -169,42 +203,26 @@ const Depreciation = () => {
           return result;
         },
       },
-      legend: {
-        data: ['资产净值', '累计折旧'],
-        bottom: 10,
-      },
-      grid: {
-        left: '3%',
-        right: '4%',
-        bottom: '15%',
-        top: '18%',
-        containLabel: true,
-      },
+      legend: { data: ['资产净值', '累计折旧'], bottom: 10 },
+      grid: { left: '3%', right: '4%', bottom: '15%', top: '18%', containLabel: true },
       xAxis: {
         type: 'category',
         boundaryGap: false,
         data: months,
-        axisLabel: {
-          rotate: 45,
-          fontSize: 10,
-        },
+        axisLabel: { rotate: 45, fontSize: 10 },
       },
       yAxis: [
         {
           type: 'value',
           name: '资产净值',
           position: 'left',
-          axisLabel: {
-            formatter: (value: number) => `¥${(value / 10000).toFixed(0)}万`,
-          },
+          axisLabel: { formatter: (value: number) => `¥${(value / 10000).toFixed(0)}万` },
         },
         {
           type: 'value',
           name: '累计折旧',
           position: 'right',
-          axisLabel: {
-            formatter: (value: number) => `¥${(value / 10000).toFixed(0)}万`,
-          },
+          axisLabel: { formatter: (value: number) => `¥${(value / 10000).toFixed(0)}万` },
         },
       ],
       series: [
@@ -215,17 +233,10 @@ const Depreciation = () => {
           symbol: 'circle',
           symbolSize: 6,
           yAxisIndex: 0,
-          lineStyle: {
-            width: 2,
-            color: '#52c41a',
-          },
+          lineStyle: { width: 2, color: '#52c41a' },
           areaStyle: {
             color: {
-              type: 'linear',
-              x: 0,
-              y: 0,
-              x2: 0,
-              y2: 1,
+              type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
               colorStops: [
                 { offset: 0, color: 'rgba(82, 196, 26, 0.3)' },
                 { offset: 1, color: 'rgba(82, 196, 26, 0.05)' },
@@ -241,17 +252,10 @@ const Depreciation = () => {
           symbol: 'circle',
           symbolSize: 6,
           yAxisIndex: 1,
-          lineStyle: {
-            width: 2,
-            color: '#fa8c16',
-          },
+          lineStyle: { width: 2, color: '#fa8c16' },
           areaStyle: {
             color: {
-              type: 'linear',
-              x: 0,
-              y: 0,
-              x2: 0,
-              y2: 1,
+              type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
               colorStops: [
                 { offset: 0, color: 'rgba(250, 140, 22, 0.3)' },
                 { offset: 1, color: 'rgba(250, 140, 22, 0.05)' },
@@ -265,12 +269,34 @@ const Depreciation = () => {
   }, [depreciationRecords]);
 
   const handleCalculate = () => {
+    if (periodPosted) {
+      message.warning('该期间已结账，无法重新计提');
+      return;
+    }
     const newRecords = calculateMonthlyDepreciation(selectedPeriod);
     if (newRecords.length > 0) {
-      message.success(`成功计算 ${newRecords.length} 条折旧记录`);
+      message.success(`成功计提 ${newRecords.length} 条折旧记录`);
     } else {
-      message.info('本期折旧已全部计算完成');
+      message.info('本期折旧已全部计提完成，无新增记录');
     }
+  };
+
+  const handlePostPeriod = () => {
+    if (uncalculatedAssets.length > 0) {
+      message.warning(`还有 ${uncalculatedAssets.length} 项资产未计提折旧，请先完成计提`);
+      return;
+    }
+    if (periodDepreciationRecords.length === 0) {
+      message.warning('本期无折旧记录，请先计提折旧');
+      return;
+    }
+    postDepreciationPeriod(selectedPeriod);
+    message.success(`${selectedPeriod} 期间已结账`);
+  };
+
+  const handleUnpostPeriod = () => {
+    unpostDepreciationPeriod(selectedPeriod);
+    message.success(`${selectedPeriod} 期间已反结账`);
   };
 
   const handleExport = () => {
@@ -301,7 +327,7 @@ const Depreciation = () => {
       title: '资产编号',
       dataIndex: 'assetNo',
       key: 'assetNo',
-      width: 140,
+      width: 130,
       fixed: 'left',
       render: (text) => <span className="font-mono">{text}</span>,
     },
@@ -309,28 +335,35 @@ const Depreciation = () => {
       title: '名称',
       dataIndex: 'name',
       key: 'name',
-      width: 160,
+      width: 150,
       ellipsis: true,
     },
     {
       title: '类别',
       dataIndex: 'categoryId',
       key: 'categoryId',
-      width: 120,
+      width: 100,
       render: (categoryId) => getCategoryName(categoryId),
+    },
+    {
+      title: '使用人',
+      dataIndex: 'currentUserId',
+      key: 'currentUserId',
+      width: 90,
+      render: (userId) => getUserName(userId),
     },
     {
       title: '折旧方法',
       dataIndex: 'depreciationMethod',
       key: 'depreciationMethod',
-      width: 120,
+      width: 110,
       render: (method: DepreciationMethod) => DEPRECIATION_METHODS[method].label,
     },
     {
       title: '原值',
       dataIndex: 'originalValue',
       key: 'originalValue',
-      width: 120,
+      width: 110,
       align: 'right',
       render: (value) => formatCurrency(value),
     },
@@ -338,15 +371,17 @@ const Depreciation = () => {
       title: '本月折旧',
       dataIndex: 'monthlyDepreciation',
       key: 'monthlyDepreciation',
-      width: 120,
+      width: 110,
       align: 'right',
-      render: (value) => <span className="text-orange-600">{formatCurrency(value)}</span>,
+      render: (value) => value > 0
+        ? <span className="text-orange-600">{formatCurrency(value)}</span>
+        : <span className="text-gray-400">未计提</span>,
     },
     {
       title: '累计折旧',
       dataIndex: 'accumulatedDepreciation',
       key: 'accumulatedDepreciation',
-      width: 120,
+      width: 110,
       align: 'right',
       render: (value) => formatCurrency(value),
     },
@@ -354,108 +389,93 @@ const Depreciation = () => {
       title: '账面净值',
       dataIndex: 'currentValue',
       key: 'currentValue',
-      width: 120,
+      width: 110,
       align: 'right',
       fixed: 'right',
       render: (value) => <span className="font-semibold text-green-600">{formatCurrency(value)}</span>,
     },
   ];
 
-  const summaryColumns: ColumnsType<CategorySummary> = [
+  const periodListColumns: ColumnsType<PostedPeriod> = [
     {
-      title: '类别',
-      dataIndex: 'categoryName',
-      key: 'categoryName',
-      width: 160,
+      title: '期间',
+      dataIndex: 'period',
+      key: 'period',
+      width: 120,
+      render: (period) => <span className="font-mono font-medium">{period}</span>,
     },
     {
-      title: '资产数量',
-      dataIndex: 'assetCount',
-      key: 'assetCount',
+      title: '状态',
+      key: 'status',
       width: 100,
-      align: 'center',
-      render: (value) => `${value} 件`,
+      render: () => <Tag color="green" icon={<CheckCircleOutlined />}>已结账</Tag>,
     },
     {
-      title: '原值总额',
-      dataIndex: 'originalValueTotal',
-      key: 'originalValueTotal',
-      width: 140,
-      align: 'right',
-      render: (value) => formatCurrency(value),
+      title: '结账时间',
+      dataIndex: 'postedAt',
+      key: 'postedAt',
+      width: 180,
     },
     {
-      title: '本月折旧',
-      dataIndex: 'monthlyDepreciationTotal',
-      key: 'monthlyDepreciationTotal',
-      width: 140,
-      align: 'right',
-      render: (value) => <span className="text-orange-600">{formatCurrency(value)}</span>,
+      title: '操作人',
+      dataIndex: 'postedBy',
+      key: 'postedBy',
+      width: 100,
+      render: (userId) => getUserName(userId),
     },
     {
-      title: '累计折旧',
-      dataIndex: 'accumulatedDepreciationTotal',
-      key: 'accumulatedDepreciationTotal',
-      width: 140,
-      align: 'right',
-      render: (value) => formatCurrency(value),
+      title: '操作',
+      key: 'actions',
+      width: 120,
+      render: (_, record) => (
+        <Popconfirm
+          title="确定要反结账吗？"
+          description="反结账后可重新修改该期间折旧数据"
+          onConfirm={() => handleUnpostPeriod()}
+          okText="确定"
+          cancelText="取消"
+        >
+          <Button type="link" size="small" icon={<UnlockOutlined />}>
+            反结账
+          </Button>
+        </Popconfirm>
+      ),
     },
-    {
-      title: '净值总额',
-      dataIndex: 'netValueTotal',
-      key: 'netValueTotal',
-      width: 140,
-      align: 'right',
-      render: (value) => <span className="font-semibold text-green-600">{formatCurrency(value)}</span>,
-    },
+  ];
+
+  const summaryColumns: ColumnsType<CategorySummary> = [
+    { title: '类别', dataIndex: 'categoryName', key: 'categoryName', width: 160 },
+    { title: '资产数量', dataIndex: 'assetCount', key: 'assetCount', width: 100, align: 'center', render: (value) => `${value} 件` },
+    { title: '原值总额', dataIndex: 'originalValueTotal', key: 'originalValueTotal', width: 140, align: 'right', render: (value) => formatCurrency(value) },
+    { title: '本月折旧', dataIndex: 'monthlyDepreciationTotal', key: 'monthlyDepreciationTotal', width: 140, align: 'right', render: (value) => <span className="text-orange-600">{formatCurrency(value)}</span> },
+    { title: '累计折旧', dataIndex: 'accumulatedDepreciationTotal', key: 'accumulatedDepreciationTotal', width: 140, align: 'right', render: (value) => formatCurrency(value) },
+    { title: '净值总额', dataIndex: 'netValueTotal', key: 'netValueTotal', width: 140, align: 'right', render: (value) => <span className="font-semibold text-green-600">{formatCurrency(value)}</span> },
   ];
 
   const tabItems = [
     {
       key: 'detail',
-      label: (
-        <span>
-          <BarChartOutlined />
-          折旧明细
-        </span>
-      ),
+      label: <span><BarChartOutlined /> 折旧明细</span>,
       children: (
         <Table
           columns={detailColumns}
           dataSource={depreciationDetailData}
           rowKey="id"
-          pagination={{
-            current: 1,
-            pageSize: 10,
-            showSizeChanger: true,
-            showQuickJumper: true,
-            showTotal: (total) => `共 ${total} 条记录`,
-          }}
-          scroll={{ x: 1000 }}
+          pagination={{ current: 1, pageSize: 10, showSizeChanger: true, showQuickJumper: true, showTotal: (total) => `共 ${total} 条记录` }}
+          scroll={{ x: 1100 }}
           size="middle"
         />
       ),
     },
     {
       key: 'summary',
-      label: (
-        <span>
-          <AreaChartOutlined />
-          折旧汇总
-        </span>
-      ),
+      label: <span><AreaChartOutlined /> 折旧汇总</span>,
       children: (
         <Table
           columns={summaryColumns}
           dataSource={categorySummaryData}
           rowKey="categoryId"
-          pagination={{
-            current: 1,
-            pageSize: 10,
-            showSizeChanger: true,
-            showQuickJumper: true,
-            showTotal: (total) => `共 ${total} 条记录`,
-          }}
+          pagination={{ current: 1, pageSize: 10, showSizeChanger: true, showQuickJumper: true, showTotal: (total) => `共 ${total} 条记录` }}
           scroll={{ x: 800 }}
           size="middle"
         />
@@ -463,16 +483,64 @@ const Depreciation = () => {
     },
     {
       key: 'trend',
-      label: (
-        <span>
-          <RiseOutlined />
-          净值趋势
-        </span>
-      ),
+      label: <span><RiseOutlined /> 净值趋势</span>,
+      children: <Card><ReactECharts option={netValueTrendOption} style={{ height: '400px' }} /></Card>,
+    },
+    {
+      key: 'posting',
+      label: <span><LockOutlined /> 结账管理</span>,
       children: (
-        <Card>
-          <ReactECharts option={netValueTrendOption} style={{ height: '400px' }} />
-        </Card>
+        <div>
+          <div className="mb-4">
+            <h3 className="text-base font-medium mb-3">已结账期间</h3>
+            <Table
+              columns={periodListColumns}
+              dataSource={postedPeriods.sort((a, b) => b.period.localeCompare(a.period))}
+              rowKey="period"
+              pagination={false}
+              size="middle"
+              locale={{ emptyText: '暂无已结账期间' }}
+            />
+          </div>
+          <div className="mt-6">
+            <h3 className="text-base font-medium mb-3">当前期间结账操作</h3>
+            <Card size="small">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-lg font-medium">{selectedPeriod}</div>
+                  <div className="text-gray-500 text-sm mt-1">
+                    已计提 {periodDepreciationRecords.length} 条 / 待计提 {uncalculatedAssets.length} 条
+                  </div>
+                  {postedPeriodInfo && (
+                    <div className="text-gray-400 text-xs mt-1">
+                      结账时间：{postedPeriodInfo.postedAt} | 操作人：{getUserName(postedPeriodInfo.postedBy)}
+                    </div>
+                  )}
+                </div>
+                <Space>
+                  {periodPosted ? (
+                    <Popconfirm
+                      title="确定要反结账吗？"
+                      description="反结账后可重新修改该期间折旧数据"
+                      onConfirm={handleUnpostPeriod}
+                    >
+                      <Button icon={<UnlockOutlined />}>反结账</Button>
+                    </Popconfirm>
+                  ) : (
+                    <Button
+                      type="primary"
+                      icon={<LockOutlined />}
+                      onClick={handlePostPeriod}
+                      disabled={uncalculatedAssets.length > 0 || periodDepreciationRecords.length === 0}
+                    >
+                      结账
+                    </Button>
+                  )}
+                </Space>
+              </div>
+            </Card>
+          </div>
+        </div>
       ),
     },
   ];
@@ -500,9 +568,7 @@ const Depreciation = () => {
               onChange={(value) => setFilterCategory(value)}
             >
               {categories.map((cat) => (
-                <Option key={cat.id} value={cat.id}>
-                  {cat.name}
-                </Option>
+                <Option key={cat.id} value={cat.id}>{cat.name}</Option>
               ))}
             </Select>
           </Col>
@@ -516,22 +582,30 @@ const Depreciation = () => {
               onChange={(value) => setFilterMethod(value)}
             >
               {Object.entries(DEPRECIATION_METHODS).map(([key, value]) => (
-                <Option key={key} value={key}>
-                  {value.label}
-                </Option>
+                <Option key={key} value={key}>{value.label}</Option>
               ))}
             </Select>
           </Col>
           <Col xs={24} sm={12} md={6} lg={5}>
             <div className="text-gray-500 text-sm mb-1">&nbsp;</div>
             <Space>
-              <Button icon={<ReloadOutlined />} onClick={handleReset}>
-                重置
-              </Button>
+              <Button icon={<ReloadOutlined />} onClick={handleReset}>重置</Button>
             </Space>
           </Col>
         </Row>
       </Card>
+
+      {periodPosted && (
+        <Alert
+          message={`期间 ${selectedPeriod} 已结账`}
+          description={`结账时间：${postedPeriodInfo?.postedAt}，操作人：${getUserName(postedPeriodInfo?.postedBy)}。如需修改请先反结账。`}
+          type="info"
+          showIcon
+          icon={<LockOutlined />}
+          className="mb-4"
+          closable={false}
+        />
+      )}
 
       <Row gutter={[16, 16]} className="mb-4">
         <Col xs={24} sm={12} lg={6}>
@@ -573,30 +647,40 @@ const Depreciation = () => {
         <Col xs={24} sm={12} lg={6}>
           <Card>
             <Statistic
-              title="本月已计提资产数"
-              value={stats.calculatedCount}
-              suffix="件"
-              valueStyle={{ color: '#1890ff' }}
+              title="计提进度"
+              value={stats.uncalculatedCount === 0 ? '100' : Math.round((stats.calculatedCount / (stats.calculatedCount + stats.uncalculatedCount)) * 100)}
+              suffix="%"
+              valueStyle={{ color: stats.uncalculatedCount === 0 ? '#52c41a' : '#fa8c16' }}
             />
+            <div className="text-xs text-gray-400 mt-1">
+              已计提 {stats.calculatedCount} / 待计提 {stats.uncalculatedCount}
+            </div>
           </Card>
         </Col>
       </Row>
 
       <Card
-        title={`折旧台账 - ${selectedPeriod}`}
+        title={
+          <Space>
+            <span>折旧台账 - {selectedPeriod}</span>
+            {periodPosted && <Tag color="green" icon={<CheckCircleOutlined />}>已结账</Tag>}
+          </Space>
+        }
         extra={
           <Space>
             <Button icon={<DownloadOutlined />} onClick={handleExport}>
               导出折旧台账
             </Button>
-            <Button
-              type="primary"
-              icon={<CalculatorOutlined />}
-              onClick={handleCalculate}
-              disabled={selectedPeriod > currentPeriod}
-            >
-              计算本月折旧
-            </Button>
+            {!periodPosted && (
+              <Button
+                type="primary"
+                icon={<CalculatorOutlined />}
+                onClick={handleCalculate}
+                disabled={stats.uncalculatedCount === 0}
+              >
+                {stats.calculatedCount > 0 ? '继续计提' : '批量计提'}
+              </Button>
+            )}
           </Space>
         }
       >

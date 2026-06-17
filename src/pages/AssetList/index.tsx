@@ -1,9 +1,8 @@
 import { useMemo, useState } from 'react';
-import { Table, Input, Select, Button, Space, Tag, Modal, Popconfirm, Card, Row, Col } from 'antd';
+import { Table, Input, Select, Button, Space, Tag, Modal, Popconfirm, Card, Row, Col, Form, App } from 'antd';
 import {
   PlusOutlined,
   SearchOutlined,
-  EyeOutlined,
   EditOutlined,
   DeleteOutlined,
   UserOutlined,
@@ -21,10 +20,12 @@ import type { Asset, AssetStatus } from '@/types';
 
 const { Search } = Input;
 const { Option } = Select;
+const { TextArea } = Input;
 
 const AssetList = () => {
   const navigate = useNavigate();
-  const { assets, categories, departments, users, deleteAsset } = useAppStore();
+  const { message } = App.useApp();
+  const { assets, categories, departments, users, deleteAsset, createAllocation, createTransfer, createScrap } = useAppStore();
 
   const [searchText, setSearchText] = useState('');
   const [filterCategory, setFilterCategory] = useState<string>();
@@ -37,8 +38,14 @@ const AssetList = () => {
     showQuickJumper: true,
     showTotal: (total) => `共 ${total} 条记录`,
   });
-  const [viewModalVisible, setViewModalVisible] = useState(false);
-  const [currentAsset, setCurrentAsset] = useState<Asset | null>(null);
+
+  const [allocateModalOpen, setAllocateModalOpen] = useState(false);
+  const [transferModalOpen, setTransferModalOpen] = useState(false);
+  const [scrapModalOpen, setScrapModalOpen] = useState(false);
+  const [activeAsset, setActiveAsset] = useState<Asset | null>(null);
+  const [allocateForm] = Form.useForm();
+  const [transferForm] = Form.useForm();
+  const [scrapForm] = Form.useForm();
 
   const filteredAssets = useMemo(() => {
     return assets.filter((asset) => {
@@ -69,29 +76,75 @@ const AssetList = () => {
     return departments.find((d) => d.id === departmentId)?.name || '-';
   };
 
-  const handleView = (asset: Asset) => {
-    setCurrentAsset(asset);
-    setViewModalVisible(true);
-  };
-
   const handleEdit = (id: string) => {
-    navigate(`/assets/${id}/edit`);
+    navigate(`/assets/edit/${id}`);
   };
 
   const handleDelete = (id: string) => {
     deleteAsset(id);
   };
 
-  const handleAllocate = (id: string) => {
-    navigate(`/assets/${id}/allocate`);
+  const handleView = (id: string) => {
+    navigate(`/assets/${id}`);
   };
 
-  const handleTransfer = (id: string) => {
-    navigate(`/assets/${id}/transfer`);
+  const openAllocateModal = (asset: Asset) => {
+    setActiveAsset(asset);
+    allocateForm.resetFields();
+    setAllocateModalOpen(true);
   };
 
-  const handleScrap = (id: string) => {
-    navigate(`/assets/${id}/scrap`);
+  const openTransferModal = (asset: Asset) => {
+    setActiveAsset(asset);
+    transferForm.resetFields();
+    setTransferModalOpen(true);
+  };
+
+  const openScrapModal = (asset: Asset) => {
+    setActiveAsset(asset);
+    scrapForm.resetFields();
+    setScrapModalOpen(true);
+  };
+
+  const handleAllocateSubmit = async () => {
+    try {
+      const values = await allocateForm.validateFields();
+      if (!activeAsset) return;
+      createAllocation(activeAsset.id, values.userId, values.departmentId);
+      message.success('分配成功');
+      setAllocateModalOpen(false);
+      allocateForm.resetFields();
+      setActiveAsset(null);
+    } catch {}
+  };
+
+  const handleTransferSubmit = async () => {
+    try {
+      const values = await transferForm.validateFields();
+      if (!activeAsset) return;
+      createTransfer(activeAsset.id, values.toUserId, values.reason);
+      message.success('调拨申请已提交');
+      setTransferModalOpen(false);
+      transferForm.resetFields();
+      setActiveAsset(null);
+    } catch {}
+  };
+
+  const handleScrapSubmit = async () => {
+    try {
+      const values = await scrapForm.validateFields();
+      if (!activeAsset) return;
+      const { currentUser } = useAppStore.getState();
+      if (!currentUser?.id) {
+        message.error('请先登录');
+        return;
+      }
+      createScrap(activeAsset.id, currentUser.id, values.reason);
+      message.success('报废申请已提交');
+      setScrapModalOpen(false);
+      scrapForm.resetFields();
+      setActiveAsset(null);
+    } catch {}
   };
 
   const handleExport = () => {
@@ -124,8 +177,8 @@ const AssetList = () => {
   const getActionButtons = (asset: Asset) => {
     const buttons = [];
     buttons.push(
-      <Button key="view" type="link" size="small" icon={<EyeOutlined />} onClick={() => handleView(asset)}>
-        查看
+      <Button key="view" type="link" size="small" onClick={() => handleView(asset.id)}>
+        详情
       </Button>
     );
 
@@ -139,7 +192,7 @@ const AssetList = () => {
 
     if (asset.status === 'in-stock') {
       buttons.push(
-        <Button key="allocate" type="link" size="small" icon={<UserOutlined />} onClick={() => handleAllocate(asset.id)}>
+        <Button key="allocate" type="link" size="small" icon={<UserOutlined />} onClick={() => openAllocateModal(asset)}>
           分配
         </Button>
       );
@@ -147,7 +200,7 @@ const AssetList = () => {
 
     if (asset.status === 'in-use') {
       buttons.push(
-        <Button key="transfer" type="link" size="small" icon={<SwapOutlined />} onClick={() => handleTransfer(asset.id)}>
+        <Button key="transfer" type="link" size="small" icon={<SwapOutlined />} onClick={() => openTransferModal(asset)}>
           调拨
         </Button>
       );
@@ -155,7 +208,7 @@ const AssetList = () => {
 
     if (asset.status !== 'scrapped' && asset.status !== 'lost' && asset.status !== 'transferred') {
       buttons.push(
-        <Button key="scrap" type="link" size="small" danger icon={<DeleteFilled />} onClick={() => handleScrap(asset.id)}>
+        <Button key="scrap" type="link" size="small" danger icon={<DeleteFilled />} onClick={() => openScrapModal(asset)}>
           报废
         </Button>
       );
@@ -360,94 +413,90 @@ const AssetList = () => {
       </Card>
 
       <Modal
-        title="资产详情"
-        open={viewModalVisible}
-        onCancel={() => setViewModalVisible(false)}
-        footer={[
-          <Button key="close" onClick={() => setViewModalVisible(false)}>
-            关闭
-          </Button>,
-        ]}
-        width={700}
+        title="资产分配"
+        open={allocateModalOpen}
+        onOk={handleAllocateSubmit}
+        onCancel={() => { setAllocateModalOpen(false); allocateForm.resetFields(); setActiveAsset(null); }}
+        okText="确认分配"
+        cancelText="取消"
       >
-        {currentAsset && (
-          <div className="space-y-4">
-            <Row gutter={16}>
-              <Col span={12}>
-                <div className="text-gray-500 text-sm">资产编号</div>
-                <div className="font-mono">{currentAsset.assetNo}</div>
-              </Col>
-              <Col span={12}>
-                <div className="text-gray-500 text-sm">状态</div>
-                <div>
-                  <Tag color={ASSET_STATUS[currentAsset.status].color}>
-                    {ASSET_STATUS[currentAsset.status].label}
-                  </Tag>
-                </div>
-              </Col>
-            </Row>
-            <Row gutter={16}>
-              <Col span={12}>
-                <div className="text-gray-500 text-sm">资产名称</div>
-                <div>{currentAsset.name}</div>
-              </Col>
-              <Col span={12}>
-                <div className="text-gray-500 text-sm">资产类别</div>
-                <div>{getCategoryName(currentAsset.categoryId)}</div>
-              </Col>
-            </Row>
-            <Row gutter={16}>
-              <Col span={12}>
-                <div className="text-gray-500 text-sm">规格型号</div>
-                <div>{currentAsset.specification || '-'}</div>
-              </Col>
-              <Col span={12}>
-                <div className="text-gray-500 text-sm">制造厂商</div>
-                <div>{currentAsset.manufacturer || '-'}</div>
-              </Col>
-            </Row>
-            <Row gutter={16}>
-              <Col span={12}>
-                <div className="text-gray-500 text-sm">购置日期</div>
-                <div>{formatDate(currentAsset.purchaseDate)}</div>
-              </Col>
-              <Col span={12}>
-                <div className="text-gray-500 text-sm">使用年限</div>
-                <div>{currentAsset.usefulLife} 个月</div>
-              </Col>
-            </Row>
-            <Row gutter={16}>
-              <Col span={8}>
-                <div className="text-gray-500 text-sm">原值</div>
-                <div>{formatCurrency(currentAsset.originalValue)}</div>
-              </Col>
-              <Col span={8}>
-                <div className="text-gray-500 text-sm">累计折旧</div>
-                <div>{formatCurrency(currentAsset.accumulatedDepreciation)}</div>
-              </Col>
-              <Col span={8}>
-                <div className="text-gray-500 text-sm">净值</div>
-                <div className="font-semibold">{formatCurrency(currentAsset.currentValue)}</div>
-              </Col>
-            </Row>
-            <Row gutter={16}>
-              <Col span={12}>
-                <div className="text-gray-500 text-sm">使用人</div>
-                <div>{getUserName(currentAsset.currentUserId)}</div>
-              </Col>
-              <Col span={12}>
-                <div className="text-gray-500 text-sm">使用部门</div>
-                <div>{getDepartmentName(currentAsset.currentDepartmentId)}</div>
-              </Col>
-            </Row>
-            <Row gutter={16}>
-              <Col span={24}>
-                <div className="text-gray-500 text-sm">存放地点</div>
-                <div>{currentAsset.location || '-'}</div>
-              </Col>
-            </Row>
+        {activeAsset && (
+          <div className="mb-4 p-3 bg-blue-50 rounded text-sm">
+            <div>资产：<span className="font-medium">{activeAsset.name}</span>（{activeAsset.assetNo}）</div>
           </div>
         )}
+        <Form form={allocateForm} layout="vertical">
+          <Form.Item name="departmentId" label="所属部门" rules={[{ required: true, message: '请选择部门' }]}>
+            <Select placeholder="请选择部门">
+              {departments.map((dept) => (
+                <Option key={dept.id} value={dept.id}>{dept.name}</Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Form.Item name="userId" label="使用人" rules={[{ required: true, message: '请选择使用人' }]}>
+            <Select placeholder="请选择使用人" showSearch optionFilterProp="children">
+              {users.map((user) => (
+                <Option key={user.id} value={user.id}>{user.name} - {getDepartmentName(user.departmentId)}</Option>
+              ))}
+            </Select>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="资产调拨"
+        open={transferModalOpen}
+        onOk={handleTransferSubmit}
+        onCancel={() => { setTransferModalOpen(false); transferForm.resetFields(); setActiveAsset(null); }}
+        okText="提交调拨"
+        cancelText="取消"
+      >
+        {activeAsset && (
+          <div className="mb-4 p-3 bg-blue-50 rounded text-sm">
+            <div>资产：<span className="font-medium">{activeAsset.name}</span>（{activeAsset.assetNo}）</div>
+            <div>当前使用人：<span className="font-medium">{getUserName(activeAsset.currentUserId)}</span></div>
+            <div>当前部门：<span className="font-medium">{getDepartmentName(activeAsset.currentDepartmentId)}</span></div>
+          </div>
+        )}
+        <Form form={transferForm} layout="vertical">
+          <Form.Item name="toUserId" label="接收人" rules={[{ required: true, message: '请选择接收人' }]}>
+            <Select placeholder="请选择接收人" showSearch optionFilterProp="children">
+              {users
+                .filter((u) => u.id !== activeAsset?.currentUserId)
+                .map((user) => (
+                  <Option key={user.id} value={user.id}>{user.name} - {getDepartmentName(user.departmentId)}</Option>
+                ))}
+            </Select>
+          </Form.Item>
+          <Form.Item name="reason" label="调拨原因">
+            <TextArea rows={3} placeholder="请输入调拨原因" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="资产报废"
+        open={scrapModalOpen}
+        onOk={handleScrapSubmit}
+        onCancel={() => { setScrapModalOpen(false); scrapForm.resetFields(); setActiveAsset(null); }}
+        okText="提交报废"
+        okButtonProps={{ danger: true }}
+        cancelText="取消"
+      >
+        {activeAsset && (
+          <div className="mb-4 p-3 bg-blue-50 rounded text-sm">
+            <div>资产：<span className="font-medium">{activeAsset.name}</span>（{activeAsset.assetNo}）</div>
+            <div>当前净值：<span className="font-medium">{formatCurrency(activeAsset.currentValue)}</span></div>
+          </div>
+        )}
+        <div className="mb-4 p-3 bg-orange-50 rounded text-orange-700 text-sm">
+          报废后资产状态将变更为待审核，审核通过后资产将标记为已报废并停止计提折旧。此操作不可撤销，请谨慎操作。
+        </div>
+        <Form form={scrapForm} layout="vertical">
+          <Form.Item name="reason" label="报废原因" rules={[{ required: true, message: '请输入报废原因' }]}>
+            <TextArea rows={4} placeholder="请详细描述报废原因" />
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   );

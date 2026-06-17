@@ -50,6 +50,7 @@ export interface Asset {
   qrCode?: string;
   specification?: string;
   manufacturer?: string;
+  scrapDate?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -108,6 +109,8 @@ export interface InventoryPlan {
   status: InventoryStatus;
   createdBy: string;
   createdAt: string;
+  scopeDepartmentId?: string;
+  scopeLocation?: string;
 }
 
 export interface InventoryDetail {
@@ -118,6 +121,14 @@ export interface InventoryDetail {
   checkedAt?: string;
   checkResult: CheckResult;
   remark?: string;
+  actualLocation?: string;
+  actualUserId?: string;
+}
+
+export interface PostedPeriod {
+  period: string;
+  postedAt: string;
+  postedBy: string;
 }
 
 export interface DashboardStats {

@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware';
 import type {
   Category, Department, User, Asset, DepreciationRecord,
   AllocationRecord, TransferRecord, ScrapRecord,
-  InventoryPlan, InventoryDetail, DashboardStats,
+  InventoryPlan, InventoryDetail, DashboardStats, PostedPeriod,
 } from '@/types';
 import { STORAGE_KEYS } from '@/utils/constants';
 import { generateId, generateAssetNo, getCurrentPeriod, generateQRCodeData } from '@/utils/helpers';
@@ -21,6 +21,7 @@ interface AppState {
   users: User[];
   assets: Asset[];
   depreciationRecords: DepreciationRecord[];
+  postedPeriods: PostedPeriod[];
   allocations: AllocationRecord[];
   transfers: TransferRecord[];
   scraps: ScrapRecord[];
@@ -39,11 +40,14 @@ interface AppState {
 
   calculateMonthlyDepreciation: (period?: string) => DepreciationRecord[];
   getAssetDepreciationRecords: (assetId: string) => DepreciationRecord[];
+  postDepreciationPeriod: (period: string) => void;
+  unpostDepreciationPeriod: (period: string) => void;
+  isPeriodPosted: (period: string) => boolean;
 
   createAllocation: (assetId: string, userId: string, departmentId: string) => AllocationRecord;
   confirmAllocation: (allocationId: string) => void;
 
-  createTransfer: (assetId: string, fromUserId: string, toUserId: string, reason?: string) => TransferRecord;
+  createTransfer: (assetId: string, toUserId: string, reason?: string) => TransferRecord;
   approveTransfer: (transferId: string) => void;
   rejectTransfer: (transferId: string, reason?: string) => void;
   confirmTransfer: (transferId: string) => void;
@@ -52,10 +56,10 @@ interface AppState {
   approveScrap: (scrapId: string, residualIncome: number) => void;
   rejectScrap: (scrapId: string, reason?: string) => void;
 
-  createInventoryPlan: (name: string, startDate: string, endDate: string, createdBy: string) => InventoryPlan;
+  createInventoryPlan: (name: string, startDate: string, endDate: string, createdBy: string, scopeDepartmentId?: string, scopeLocation?: string) => InventoryPlan;
   startInventory: (planId: string) => void;
   completeInventory: (planId: string) => void;
-  checkAsset: (planId: string, assetId: string, result: 'matched' | 'mismatched' | 'lost', remark?: string) => void;
+  checkAsset: (planId: string, assetId: string, result: 'matched' | 'mismatched' | 'lost', remark?: string, actualLocation?: string, actualUserId?: string) => void;
   getInventoryDetails: (planId: string) => (InventoryDetail & { asset?: Asset })[];
   getInventorySummary: (planId: string) => { total: number; checked: number; matched: number; mismatched: number; lost: number };
 
@@ -82,6 +86,7 @@ const useAppStore = create<AppState>()(
       users: [],
       assets: [],
       depreciationRecords: [],
+      postedPeriods: [],
       allocations: [],
       transfers: [],
       scraps: [],
@@ -192,20 +197,31 @@ const useAppStore = create<AppState>()(
 
       calculateMonthlyDepreciation: (period) => {
         const targetPeriod = period || getCurrentPeriod();
-        const { assets, depreciationRecords } = get();
+        const { assets, depreciationRecords, postedPeriods } = get();
+
+        if (postedPeriods.some(p => p.period === targetPeriod)) return [];
+
         const newRecords: DepreciationRecord[] = [];
 
         assets.forEach(asset => {
           if (asset.status === 'scrapped' || asset.status === 'lost') return;
-          
+
+          if (asset.scrapDate) {
+            const scrapMonth = dayjs(asset.scrapDate).format('YYYY-MM');
+            if (targetPeriod >= scrapMonth) return;
+          }
+
           const existingRecord = depreciationRecords.find(r => r.assetId === asset.id && r.period === targetPeriod);
           if (existingRecord) return;
 
           const monthsDepreciated = depreciationRecords.filter(r => r.assetId === asset.id).length;
           if (monthsDepreciated >= asset.usefulLife) return;
 
+          const purchaseMonth = dayjs(asset.purchaseDate).format('YYYY-MM');
+          if (targetPeriod < purchaseMonth) return;
+
           const calc = calculateDepreciation(asset, monthsDepreciated);
-          
+
           const record: DepreciationRecord = {
             id: generateId(),
             assetId: asset.id,
@@ -236,6 +252,27 @@ const useAppStore = create<AppState>()(
         return get().depreciationRecords
           .filter(r => r.assetId === assetId)
           .sort((a, b) => a.period.localeCompare(b.period));
+      },
+
+      postDepreciationPeriod: (period) => {
+        const { postedPeriods, currentUser } = get();
+        if (postedPeriods.some(p => p.period === period)) return;
+        set({
+          postedPeriods: [...postedPeriods, {
+            period,
+            postedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+            postedBy: currentUser?.id || '',
+          }],
+        });
+      },
+
+      unpostDepreciationPeriod: (period) => {
+        const { postedPeriods } = get();
+        set({ postedPeriods: postedPeriods.filter(p => p.period !== period) });
+      },
+
+      isPeriodPosted: (period) => {
+        return get().postedPeriods.some(p => p.period === period);
       },
 
       createAllocation: (assetId, userId, departmentId) => {
@@ -276,18 +313,21 @@ const useAppStore = create<AppState>()(
         });
       },
 
-      createTransfer: (assetId, fromUserId, toUserId, reason) => {
+      createTransfer: (assetId, toUserId, reason) => {
         const { transfers, assets, users } = get();
         const asset = assets.find(a => a.id === assetId);
         const toUser = users.find(u => u.id === toUserId);
         if (!asset || !toUser) throw new Error('资产或用户不存在');
+
+        const fromUserId = asset.currentUserId || '';
+        const fromDepartmentId = asset.currentDepartmentId || '';
 
         const transfer: TransferRecord = {
           id: generateId(),
           assetId,
           fromUserId,
           toUserId,
-          fromDepartmentId: asset.currentDepartmentId!,
+          fromDepartmentId,
           toDepartmentId: toUser.departmentId,
           applyDate: dayjs().format('YYYY-MM-DD'),
           status: 'pending',
@@ -360,14 +400,15 @@ const useAppStore = create<AppState>()(
         const scrap = scraps.find(s => s.id === scrapId);
         if (!scrap) return;
 
-        get().updateAsset(scrap.assetId, { status: 'scrapped' });
+        const scrapDate = dayjs().format('YYYY-MM-DD');
+        get().updateAsset(scrap.assetId, { status: 'scrapped', scrapDate });
         set({
           scraps: scraps.map(s =>
             s.id === scrapId
               ? {
                   ...s,
                   status: 'approved',
-                  approvedAt: dayjs().format('YYYY-MM-DD'),
+                  approvedAt: scrapDate,
                   approvedBy: currentUser?.id,
                   residualIncome,
                 }
@@ -385,7 +426,7 @@ const useAppStore = create<AppState>()(
         });
       },
 
-      createInventoryPlan: (name, startDate, endDate, createdBy) => {
+      createInventoryPlan: (name, startDate, endDate, createdBy, scopeDepartmentId, scopeLocation) => {
         const { inventoryPlans, inventoryDetails, assets } = get();
         const plan: InventoryPlan = {
           id: generateId(),
@@ -395,17 +436,25 @@ const useAppStore = create<AppState>()(
           status: 'draft',
           createdBy,
           createdAt: dayjs().format('YYYY-MM-DD'),
+          scopeDepartmentId,
+          scopeLocation,
         };
 
-        const newDetails: InventoryDetail[] = assets
-          .filter(a => a.status !== 'scrapped' && a.status !== 'lost')
-          .map(a => ({
-            id: generateId(),
-            planId: plan.id,
-            assetId: a.id,
-            systemStatus: a.status,
-            checkResult: 'pending' as const,
-          }));
+        let scopedAssets = assets.filter(a => a.status !== 'scrapped' && a.status !== 'lost');
+        if (scopeDepartmentId) {
+          scopedAssets = scopedAssets.filter(a => a.currentDepartmentId === scopeDepartmentId);
+        }
+        if (scopeLocation) {
+          scopedAssets = scopedAssets.filter(a => a.location === scopeLocation);
+        }
+
+        const newDetails: InventoryDetail[] = scopedAssets.map(a => ({
+          id: generateId(),
+          planId: plan.id,
+          assetId: a.id,
+          systemStatus: a.status,
+          checkResult: 'pending' as const,
+        }));
 
         set({
           inventoryPlans: [...inventoryPlans, plan],
@@ -433,12 +482,12 @@ const useAppStore = create<AppState>()(
         });
       },
 
-      checkAsset: (planId, assetId, result, remark) => {
+      checkAsset: (planId, assetId, result, remark, actualLocation, actualUserId) => {
         const { inventoryDetails } = get();
         set({
           inventoryDetails: inventoryDetails.map(d =>
             d.planId === planId && d.assetId === assetId
-              ? { ...d, checkResult: result, checkedAt: dayjs().format('YYYY-MM-DD'), remark }
+              ? { ...d, checkResult: result, checkedAt: dayjs().format('YYYY-MM-DD'), remark, actualLocation, actualUserId }
               : d
           ),
         });
@@ -533,6 +582,7 @@ const useAppStore = create<AppState>()(
         users: state.users,
         assets: state.assets,
         depreciationRecords: state.depreciationRecords,
+        postedPeriods: state.postedPeriods,
         allocations: state.allocations,
         transfers: state.transfers,
         scraps: state.scraps,

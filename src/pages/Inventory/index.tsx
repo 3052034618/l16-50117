@@ -47,6 +47,8 @@ const Inventory = () => {
   const {
     inventoryPlans,
     assets,
+    departments,
+    users,
     currentUser,
     createInventoryPlan,
     startInventory,
@@ -64,6 +66,12 @@ const Inventory = () => {
   const [checkingAsset, setCheckingAsset] = useState<{ assetId: string; assetNo: string } | null>(null);
   const [createForm] = Form.useForm();
   const [checkForm] = Form.useForm();
+
+  const uniqueLocations = useMemo(() => {
+    const locations = new Set<string>();
+    assets.forEach(a => { if (a.location) locations.add(a.location); });
+    return Array.from(locations);
+  }, [assets]);
 
   const selectedPlan = useMemo(() => {
     return inventoryPlans.find((p) => p.id === selectedPlanId) || null;
@@ -102,12 +110,22 @@ const Inventory = () => {
     return Math.round((inventorySummary.checked / inventorySummary.total) * 100);
   }, [inventorySummary]);
 
+  const getUserName = (userId?: string) => {
+    if (!userId) return '-';
+    return users.find(u => u.id === userId)?.name || '-';
+  };
+
+  const getDepartmentName = (departmentId?: string) => {
+    if (!departmentId) return '-';
+    return departments.find(d => d.id === departmentId)?.name || '-';
+  };
+
   const handleCreatePlan = () => {
     createForm.validateFields().then((values) => {
-      const { name, dateRange } = values;
+      const { name, dateRange, scopeDepartmentId, scopeLocation } = values;
       const startDate = formatDate(dateRange[0].toDate());
       const endDate = formatDate(dateRange[1].toDate());
-      createInventoryPlan(name, startDate, endDate, currentUser?.id || '');
+      createInventoryPlan(name, startDate, endDate, currentUser?.id || '', scopeDepartmentId, scopeLocation);
       message.success('盘点计划创建成功');
       setCreateModalVisible(false);
       createForm.resetFields();
@@ -150,8 +168,8 @@ const Inventory = () => {
   const handleCheckConfirm = () => {
     if (!selectedPlanId || !checkingAsset) return;
     checkForm.validateFields().then((values) => {
-      const { result, remark } = values;
-      checkAsset(selectedPlanId, checkingAsset.assetId, result, remark);
+      const { result, remark, actualLocation, actualUserId } = values;
+      checkAsset(selectedPlanId, checkingAsset.assetId, result, remark, actualLocation, actualUserId);
       message.success('盘点结果已记录');
       setCheckModalVisible(false);
       setCheckingAsset(null);
@@ -178,7 +196,12 @@ const Inventory = () => {
         assetNo: d.asset?.assetNo,
         assetName: d.asset?.name,
         systemStatus: ASSET_STATUS[d.systemStatus as keyof typeof ASSET_STATUS]?.label || d.systemStatus,
+        systemUser: getUserName(d.asset?.currentUserId),
+        systemDepartment: getDepartmentName(d.asset?.currentDepartmentId),
+        systemLocation: d.asset?.location || '-',
         checkResult: CHECK_RESULT[d.checkResult].label,
+        actualUser: d.actualUserId ? getUserName(d.actualUserId) : '-',
+        actualLocation: d.actualLocation || '-',
         remark: d.remark,
         checkedAt: d.checkedAt,
       })),
@@ -196,28 +219,39 @@ const Inventory = () => {
       title: '名称',
       dataIndex: 'name',
       key: 'name',
-      width: 180,
+      width: 160,
       ellipsis: true,
+    },
+    {
+      title: '盘点范围',
+      key: 'scope',
+      width: 160,
+      render: (_, record) => {
+        const parts: string[] = [];
+        if (record.scopeDepartmentId) parts.push(getDepartmentName(record.scopeDepartmentId));
+        if (record.scopeLocation) parts.push(record.scopeLocation);
+        return parts.length > 0 ? parts.join(' / ') : <span className="text-gray-400">全部资产</span>;
+      },
     },
     {
       title: '开始日期',
       dataIndex: 'startDate',
       key: 'startDate',
-      width: 120,
+      width: 110,
       render: (date) => formatDate(date),
     },
     {
       title: '结束日期',
       dataIndex: 'endDate',
       key: 'endDate',
-      width: 120,
+      width: 110,
       render: (date) => formatDate(date),
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 100,
+      width: 90,
       render: (status: InventoryStatus) => {
         const statusInfo = INVENTORY_STATUS[status];
         return <Tag color={statusInfo.color}>{statusInfo.label}</Tag>;
@@ -271,47 +305,63 @@ const Inventory = () => {
       title: '资产编号',
       dataIndex: ['asset', 'assetNo'],
       key: 'assetNo',
-      width: 140,
+      width: 130,
       render: (text) => text && <span className="font-mono">{text}</span>,
     },
     {
       title: '名称',
       dataIndex: ['asset', 'name'],
       key: 'assetName',
-      width: 180,
+      width: 150,
     },
     {
-      title: '系统状态',
-      dataIndex: 'systemStatus',
-      key: 'systemStatus',
+      title: '系统使用人',
+      key: 'systemUser',
       width: 100,
-      render: (status) => {
-        const statusInfo = ASSET_STATUS[status as keyof typeof ASSET_STATUS];
-        return statusInfo ? <Tag color={statusInfo.color}>{statusInfo.label}</Tag> : status;
-      },
+      render: (_, record) => getUserName(record.asset?.currentUserId),
+    },
+    {
+      title: '系统位置',
+      key: 'systemLocation',
+      width: 120,
+      render: (_, record) => record.asset?.location || '-',
     },
     {
       title: '盘点结果',
       dataIndex: 'checkResult',
       key: 'checkResult',
-      width: 100,
+      width: 90,
       render: (result: CheckResult) => {
         const resultInfo = CHECK_RESULT[result];
         return <Tag color={resultInfo.color}>{resultInfo.label}</Tag>;
       },
     },
     {
+      title: '实际使用人',
+      dataIndex: 'actualUserId',
+      key: 'actualUserId',
+      width: 100,
+      render: (userId) => userId ? getUserName(userId) : '-',
+    },
+    {
+      title: '实际位置',
+      dataIndex: 'actualLocation',
+      key: 'actualLocation',
+      width: 120,
+      render: (text) => text || '-',
+    },
+    {
       title: '备注',
       dataIndex: 'remark',
       key: 'remark',
-      width: 150,
+      width: 120,
       ellipsis: true,
       render: (text) => text || '-',
     },
     {
       title: '操作',
       key: 'actions',
-      width: 200,
+      width: 180,
       fixed: 'right',
       render: (_, record) => (
         <Space wrap size={0}>
@@ -419,7 +469,7 @@ const Inventory = () => {
                 showQuickJumper: true,
                 showTotal: (total) => `共 ${total} 条记录`,
               }}
-              scroll={{ x: 700 }}
+              scroll={{ x: 800 }}
               size="middle"
               rowClassName={(record) =>
                 record.id === selectedPlanId ? 'bg-blue-50' : ''
@@ -436,9 +486,8 @@ const Inventory = () => {
                 <Space>
                   {selectedPlan.status === 'in-progress' && (
                     <Button icon={<QrcodeOutlined />} onClick={() => {
-                      checkForm.resetFields();
-                      setCheckModalVisible(false);
                       setCheckingAsset(null);
+                      checkForm.resetFields();
                       Modal.confirm({
                         title: '扫码盘点',
                         content: (
@@ -548,7 +597,7 @@ const Inventory = () => {
                   showQuickJumper: true,
                   showTotal: (total) => `共 ${total} 条记录`,
                 }}
-                scroll={{ x: 800 }}
+                scroll={{ x: 1100 }}
                 size="middle"
               />
             </Card>
@@ -566,7 +615,7 @@ const Inventory = () => {
         onOk={handleCreatePlan}
         okText="确认"
         cancelText="取消"
-        width={500}
+        width={550}
       >
         <Form form={createForm} layout="vertical">
           <Form.Item
@@ -586,6 +635,20 @@ const Inventory = () => {
               disabledDate={(current) => current && current < dayjs().startOf('day')}
             />
           </Form.Item>
+          <Form.Item name="scopeDepartmentId" label="盘点范围 - 部门">
+            <Select placeholder="不选则盘点全部部门" allowClear>
+              {departments.map((dept) => (
+                <Option key={dept.id} value={dept.id}>{dept.name}</Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Form.Item name="scopeLocation" label="盘点范围 - 存放位置">
+            <Select placeholder="不选则盘点全部位置" allowClear>
+              {uniqueLocations.map((loc) => (
+                <Option key={loc} value={loc}>{loc}</Option>
+              ))}
+            </Select>
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -600,7 +663,7 @@ const Inventory = () => {
         onOk={handleCheckConfirm}
         okText="确认"
         cancelText="取消"
-        width={400}
+        width={500}
       >
         <div className="mb-4 p-3 bg-gray-50 rounded">
           <div className="text-gray-600">
@@ -625,10 +688,17 @@ const Inventory = () => {
               </Option>
             </Select>
           </Form.Item>
-          <Form.Item
-            name="remark"
-            label="备注"
-          >
+          <Form.Item name="actualLocation" label="实际存放位置">
+            <Input placeholder="请记录资产实际存放位置" />
+          </Form.Item>
+          <Form.Item name="actualUserId" label="实际使用人">
+            <Select placeholder="请选择资产实际使用人" allowClear showSearch optionFilterProp="children">
+              {users.map((user) => (
+                <Option key={user.id} value={user.id}>{user.name}</Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Form.Item name="remark" label="备注">
             <Input.TextArea placeholder="请输入备注信息（选填）" rows={3} />
           </Form.Item>
         </Form>

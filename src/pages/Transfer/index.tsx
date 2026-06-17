@@ -90,8 +90,8 @@ const TransferPage = () => {
   }, [filteredTransfers, activeTab]);
 
   const inUseAssets = useMemo(() => {
-    return assets.filter((a) => a.status === 'in-use' && a.currentUserId === currentUser?.id);
-  }, [assets, currentUser]);
+    return assets.filter((a) => a.status === 'in-use');
+  }, [assets]);
 
   const getAssetInfo = (assetId: string): Asset | undefined => {
     return assets.find((a) => a.id === assetId);
@@ -114,12 +114,8 @@ const TransferPage = () => {
   const handleCreate = () => {
     createForm.validateFields().then((values) => {
       const { assetId, toUserId, reason } = values;
-      if (!currentUser) {
-        message.error('请先登录');
-        return;
-      }
       try {
-        createTransfer(assetId, currentUser.id, toUserId, reason);
+        createTransfer(assetId, toUserId, reason);
         message.success('调拨申请已提交');
         setCreateModalVisible(false);
         createForm.resetFields();
@@ -398,7 +394,7 @@ const TransferPage = () => {
             <Select placeholder="请选择使用中的资产" showSearch optionFilterProp="children">
               {inUseAssets.map((asset) => (
                 <Option key={asset.id} value={asset.id}>
-                  {asset.name} ({asset.assetNo})
+                  {asset.name} ({asset.assetNo}) - {getUserName(asset.currentUserId || '')}/{getDepartmentName(asset.currentDepartmentId || '')}
                 </Option>
               ))}
             </Select>
@@ -409,13 +405,11 @@ const TransferPage = () => {
             rules={[{ required: true, message: '请选择接收人' }]}
           >
             <Select placeholder="请选择接收人" showSearch optionFilterProp="children">
-              {users
-                .filter((u) => u.id !== currentUser?.id)
-                .map((user) => (
-                  <Option key={user.id} value={user.id}>
-                    {user.name} - {getDepartmentName(user.departmentId)}
-                  </Option>
-                ))}
+              {users.map((user) => (
+                <Option key={user.id} value={user.id}>
+                  {user.name} - {getDepartmentName(user.departmentId)}
+                </Option>
+              ))}
             </Select>
           </Form.Item>
           <Form.Item name="reason" label="调拨原因">

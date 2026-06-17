@@ -272,17 +272,11 @@ const AssetDetail = () => {
   const handleTransferSubmit = async () => {
     try {
       const values = await transferForm.validateFields();
-      if (!currentUser?.id) {
-        message.error('请先登录');
-        return;
-      }
-      createTransfer(id!, currentUser.id, values.toUserId, values.reason);
+      createTransfer(id!, values.toUserId, values.reason);
       message.success('调拨申请已提交');
       setTransferModalOpen(false);
       transferForm.resetFields();
-    } catch {
-      // 表单验证失败
-    }
+    } catch {}
   };
 
   const handleScrapSubmit = async () => {
@@ -528,20 +522,27 @@ const AssetDetail = () => {
         okText="提交调拨"
         cancelText="取消"
       >
+        <div className="mb-4 p-3 bg-blue-50 rounded text-sm">
+          <div>调出人：<span className="font-medium">{currentUserInfo?.name || '-'}</span></div>
+          <div>调出部门：<span className="font-medium">{currentDepartment?.name || '-'}</span></div>
+        </div>
         <Form form={transferForm} layout="vertical">
           <Form.Item
             name="toUserId"
             label="接收人"
             rules={[{ required: true, message: '请选择接收人' }]}
           >
-            <Select placeholder="请选择接收人">
+            <Select placeholder="请选择接收人" showSearch optionFilterProp="children">
               {users
-                .filter((u) => u.id !== currentUser?.id)
-                .map((user) => (
-                  <Option key={user.id} value={user.id}>
-                    {user.name}
-                  </Option>
-                ))}
+                .filter((u) => u.id !== asset?.currentUserId)
+                .map((user) => {
+                  const dept = departments.find(d => d.id === user.departmentId);
+                  return (
+                    <Option key={user.id} value={user.id}>
+                      {user.name} - {dept?.name || ''}
+                    </Option>
+                  );
+                })}
             </Select>
           </Form.Item>
           <Form.Item name="reason" label="调拨原因">
