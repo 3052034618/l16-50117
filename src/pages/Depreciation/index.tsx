@@ -25,6 +25,9 @@ import {
   LockOutlined,
   UnlockOutlined,
   CheckCircleOutlined,
+  FileTextOutlined,
+  AppstoreOutlined,
+  TeamOutlined,
 } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import dayjs from 'dayjs';
@@ -50,6 +53,13 @@ interface CategorySummary {
   monthlyDepreciationTotal: number;
   accumulatedDepreciationTotal: number;
   netValueTotal: number;
+}
+
+interface DepartmentSummary {
+  departmentId: string;
+  departmentName: string;
+  assetCount: number;
+  monthlyDepreciationTotal: number;
 }
 
 const Depreciation = () => {
@@ -169,6 +179,33 @@ const Depreciation = () => {
       netValueTotal: Math.round(item.netValueTotal * 100) / 100,
     }));
   }, [depreciationDetailData]);
+
+  const departmentSummaryData = useMemo((): DepartmentSummary[] => {
+    const summaryMap = new Map<string, DepartmentSummary>();
+
+    depreciationDetailData
+      .filter((item) => item.monthlyDepreciation > 0)
+      .forEach((item) => {
+        const deptId = item.currentDepartmentId || 'unallocated';
+        const existing = summaryMap.get(deptId);
+        if (existing) {
+          existing.assetCount += 1;
+          existing.monthlyDepreciationTotal += item.monthlyDepreciation;
+        } else {
+          summaryMap.set(deptId, {
+            departmentId: deptId,
+            departmentName: deptId === 'unallocated' ? '未分配' : departments.find((d) => d.id === deptId)?.name || '-',
+            assetCount: 1,
+            monthlyDepreciationTotal: item.monthlyDepreciation,
+          });
+        }
+      });
+
+    return Array.from(summaryMap.values()).map((item) => ({
+      ...item,
+      monthlyDepreciationTotal: Math.round(item.monthlyDepreciationTotal * 100) / 100,
+    }));
+  }, [depreciationDetailData, departments]);
 
   const netValueTrendOption = useMemo((): EChartsOption => {
     const months = getMonthList(dayjs().subtract(11, 'month').format('YYYY-MM'), 12);
@@ -322,6 +359,49 @@ const Depreciation = () => {
     setFilterMethod(undefined);
   };
 
+  const handleExportVoucher = (type: 'category' | 'department') => {
+    const data = type === 'category'
+      ? categorySummaryData
+        .filter((c) => c.monthlyDepreciationTotal > 0)
+        .map((item) => ({
+          汇总维度: '资产类别',
+          汇总项: item.categoryName,
+          资产数量: item.assetCount,
+          '借方-折旧费': item.monthlyDepreciationTotal,
+          '贷方-累计折旧': item.monthlyDepreciationTotal,
+        }))
+      : departmentSummaryData
+        .filter((d) => d.monthlyDepreciationTotal > 0)
+        .map((item) => ({
+          汇总维度: '部门',
+          汇总项: item.departmentName,
+          资产数量: item.assetCount,
+          '借方-折旧费': item.monthlyDepreciationTotal,
+          '贷方-累计折旧': item.monthlyDepreciationTotal,
+        }));
+
+    const totalDebit = data.reduce((sum, row) => sum + row['借方-折旧费'], 0);
+    data.push({
+      汇总维度: '合计',
+      汇总项: '',
+      资产数量: data.reduce((sum, row) => sum + row.资产数量, 0),
+      '借方-折旧费': Math.round(totalDebit * 100) / 100,
+      '贷方-累计折旧': Math.round(totalDebit * 100) / 100,
+    });
+
+    downloadJson(data, `折旧凭证_${selectedPeriod}_${type === 'category' ? '按类别' : '按部门'}.json`);
+    message.success('凭证导出成功');
+  };
+
+  const departmentVoucherColumns: ColumnsType<DepartmentSummary> = [
+    { title: '摘要', key: 'desc', width: 200, render: (_, record) => `计提${selectedPeriod}折旧 - ${record.departmentName}` },
+    { title: '会计科目', key: 'debit', width: 220, render: () => '借：制造费用 / 管理费用 - 折旧费' },
+    { title: '借方金额', dataIndex: 'monthlyDepreciationTotal', key: 'debitAmount', width: 140, align: 'right', render: (v) => formatCurrency(v) },
+    { title: '', key: 'spacer1', width: 30 },
+    { title: '会计科目', key: 'credit', width: 180, render: () => '贷：累计折旧' },
+    { title: '贷方金额', dataIndex: 'monthlyDepreciationTotal', key: 'creditAmount', width: 140, align: 'right', render: (v) => formatCurrency(v) },
+  ];
+
   const detailColumns: ColumnsType<DepreciationDetail> = [
     {
       title: '资产编号',
@@ -452,6 +532,15 @@ const Depreciation = () => {
     { title: '净值总额', dataIndex: 'netValueTotal', key: 'netValueTotal', width: 140, align: 'right', render: (value) => <span className="font-semibold text-green-600">{formatCurrency(value)}</span> },
   ];
 
+  const categoryVoucherColumns: ColumnsType<CategorySummary> = [
+    { title: '摘要', key: 'desc', width: 200, render: (_, record) => `计提${selectedPeriod}折旧 - ${record.categoryName}` },
+    { title: '会计科目', key: 'debit', width: 220, render: () => '借：制造费用 / 管理费用 - 折旧费' },
+    { title: '借方金额', dataIndex: 'monthlyDepreciationTotal', key: 'debitAmount', width: 140, align: 'right', render: (v) => formatCurrency(v) },
+    { title: '', key: 'spacer1', width: 30 },
+    { title: '会计科目', key: 'credit', width: 180, render: () => '贷：累计折旧' },
+    { title: '贷方金额', dataIndex: 'monthlyDepreciationTotal', key: 'creditAmount', width: 140, align: 'right', render: (v) => formatCurrency(v) },
+  ];
+
   const tabItems = [
     {
       key: 'detail',
@@ -540,6 +629,132 @@ const Depreciation = () => {
               </div>
             </Card>
           </div>
+        </div>
+      ),
+    },
+    {
+      key: 'voucher',
+      label: <span><FileTextOutlined /> 折旧凭证</span>,
+      children: !periodPosted ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="请先完成结账后查看折旧凭证"
+          description="凭证需结账后生成，确保本期折旧计提完成且数据不再变更。"
+          className="my-4"
+        />
+      ) : (
+        <div>
+          <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded text-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <CheckCircleOutlined className="text-green-600 mr-2" />
+                <span className="text-green-800 font-medium">
+                  期间 {selectedPeriod} 已结账，折旧凭证已生成
+                </span>
+              </div>
+              {postedPeriodInfo && (
+                <span className="text-gray-500 text-xs">
+                  制单人：{getUserName(postedPeriodInfo.postedBy)} | 制单时间：{postedPeriodInfo.postedAt}
+                </span>
+              )}
+            </div>
+          </div>
+          <Tabs
+            defaultActiveKey="category"
+            items={[
+              {
+                key: 'category',
+                label: <span><AppstoreOutlined /> 按资产类别</span>,
+                children: (
+                  <div>
+                    <div className="mb-2 text-right">
+                      <Button size="small" icon={<DownloadOutlined />} onClick={() => handleExportVoucher('category')}>
+                        导出凭证
+                      </Button>
+                    </div>
+                    <Table
+                      columns={categoryVoucherColumns}
+                      dataSource={categorySummaryData.filter((c) => c.monthlyDepreciationTotal > 0)}
+                      rowKey="categoryId"
+                      pagination={false}
+                      size="middle"
+                      summary={(pageData) => {
+                        let totalDebit = 0;
+                        let totalCount = 0;
+                        pageData.forEach(({ monthlyDepreciationTotal, assetCount }) => {
+                          totalDebit += monthlyDepreciationTotal;
+                          totalCount += assetCount;
+                        });
+                        return (
+                          <>
+                            <Table.Summary.Row>
+                              <Table.Summary.Cell index={0} colSpan={2}>
+                                <b>合计（共 {totalCount} 项资产）</b>
+                              </Table.Summary.Cell>
+                              <Table.Summary.Cell index={2} align="right">
+                                <b>{formatCurrency(Math.round(totalDebit * 100) / 100)}</b>
+                              </Table.Summary.Cell>
+                              <Table.Summary.Cell index={3} />
+                              <Table.Summary.Cell index={4} />
+                              <Table.Summary.Cell index={5} align="right">
+                                <b>{formatCurrency(Math.round(totalDebit * 100) / 100)}</b>
+                              </Table.Summary.Cell>
+                            </Table.Summary.Row>
+                          </>
+                        );
+                      }}
+                    />
+                  </div>
+                ),
+              },
+              {
+                key: 'department',
+                label: <span><TeamOutlined /> 按使用部门</span>,
+                children: (
+                  <div>
+                    <div className="mb-2 text-right">
+                      <Button size="small" icon={<DownloadOutlined />} onClick={() => handleExportVoucher('department')}>
+                        导出凭证
+                      </Button>
+                    </div>
+                    <Table
+                      columns={departmentVoucherColumns}
+                      dataSource={departmentSummaryData}
+                      rowKey="departmentId"
+                      pagination={false}
+                      size="middle"
+                      summary={(pageData) => {
+                        let totalDebit = 0;
+                        let totalCount = 0;
+                        pageData.forEach(({ monthlyDepreciationTotal, assetCount }) => {
+                          totalDebit += monthlyDepreciationTotal;
+                          totalCount += assetCount;
+                        });
+                        return (
+                          <>
+                            <Table.Summary.Row>
+                              <Table.Summary.Cell index={0} colSpan={2}>
+                                <b>合计（共 {totalCount} 项资产）</b>
+                              </Table.Summary.Cell>
+                              <Table.Summary.Cell index={2} align="right">
+                                <b>{formatCurrency(Math.round(totalDebit * 100) / 100)}</b>
+                              </Table.Summary.Cell>
+                              <Table.Summary.Cell index={3} />
+                              <Table.Summary.Cell index={4} />
+                              <Table.Summary.Cell index={5} align="right">
+                                <b>{formatCurrency(Math.round(totalDebit * 100) / 100)}</b>
+                              </Table.Summary.Cell>
+                            </Table.Summary.Row>
+                          </>
+                        );
+                      }}
+                    />
+                  </div>
+                ),
+              },
+            ]}
+          />
         </div>
       ),
     },

@@ -15,6 +15,7 @@ import {
   Row,
   Col,
   Descriptions,
+  Divider,
 } from 'antd';
 import {
   PlusOutlined,
@@ -60,6 +61,7 @@ const TransferPage = () => {
   const [viewModalVisible, setViewModalVisible] = useState(false);
   const [rejectModalVisible, setRejectModalVisible] = useState(false);
   const [currentTransfer, setCurrentTransfer] = useState<TransferRecord | null>(null);
+  const [selectedAssetId, setSelectedAssetId] = useState<string>();
   const [createForm] = Form.useForm();
   const [rejectForm] = Form.useForm();
 
@@ -93,6 +95,11 @@ const TransferPage = () => {
     return assets.filter((a) => a.status === 'in-use');
   }, [assets]);
 
+  const selectedAsset = useMemo((): Asset | undefined => {
+    if (!selectedAssetId) return undefined;
+    return assets.find((a) => a.id === selectedAssetId);
+  }, [assets, selectedAssetId]);
+
   const getAssetInfo = (assetId: string): Asset | undefined => {
     return assets.find((a) => a.id === assetId);
   };
@@ -111,6 +118,11 @@ const TransferPage = () => {
     return `${userName} / ${deptName}`;
   };
 
+  const handleAssetChange = (assetId: string) => {
+    setSelectedAssetId(assetId);
+    createForm.setFieldValue('toUserId', undefined);
+  };
+
   const handleCreate = () => {
     createForm.validateFields().then((values) => {
       const { assetId, toUserId, reason } = values;
@@ -119,6 +131,7 @@ const TransferPage = () => {
         message.success('调拨申请已提交');
         setCreateModalVisible(false);
         createForm.resetFields();
+        setSelectedAssetId(undefined);
       } catch (error) {
         message.error('提交失败，请重试');
       }
@@ -171,6 +184,12 @@ const TransferPage = () => {
   const handleReset = () => {
     setSearchText('');
     setFilterStatus(undefined);
+  };
+
+  const handleOpenCreateModal = () => {
+    setCreateModalVisible(true);
+    createForm.resetFields();
+    setSelectedAssetId(undefined);
   };
 
   const getActionButtons = (record: TransferRecord) => {
@@ -236,14 +255,14 @@ const TransferPage = () => {
       title: '资产编号',
       dataIndex: 'assetId',
       key: 'assetNo',
-      width: 140,
+      width: 130,
       render: (assetId) => {
         const asset = getAssetInfo(assetId);
         return <span className="font-mono">{asset?.assetNo || '-'}</span>;
       },
     },
     {
-      title: '名称',
+      title: '资产名称',
       dataIndex: 'assetId',
       key: 'assetName',
       width: 160,
@@ -254,29 +273,45 @@ const TransferPage = () => {
       },
     },
     {
-      title: '调出人/部门',
-      key: 'from',
-      width: 180,
-      render: (_, record) => getUserWithDepartment(record.fromUserId, record.fromDepartmentId),
+      title: '调出人',
+      dataIndex: 'fromUserId',
+      key: 'fromUser',
+      width: 90,
+      render: (userId) => getUserName(userId),
     },
     {
-      title: '调入人/部门',
-      key: 'to',
-      width: 180,
-      render: (_, record) => getUserWithDepartment(record.toUserId, record.toDepartmentId),
+      title: '调出部门',
+      dataIndex: 'fromDepartmentId',
+      key: 'fromDept',
+      width: 120,
+      render: (deptId) => getDepartmentName(deptId),
+    },
+    {
+      title: '调入人',
+      dataIndex: 'toUserId',
+      key: 'toUser',
+      width: 90,
+      render: (userId) => getUserName(userId),
+    },
+    {
+      title: '调入部门',
+      dataIndex: 'toDepartmentId',
+      key: 'toDept',
+      width: 120,
+      render: (deptId) => getDepartmentName(deptId),
     },
     {
       title: '申请日期',
       dataIndex: 'applyDate',
       key: 'applyDate',
-      width: 120,
+      width: 110,
       render: (date) => formatDate(date),
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 100,
+      width: 90,
       render: (status: TransferStatus) => {
         const statusInfo = TRANSFER_STATUS[status];
         return <Tag color={statusInfo.color}>{statusInfo.label}</Tag>;
@@ -285,7 +320,7 @@ const TransferPage = () => {
     {
       title: '操作',
       key: 'actions',
-      width: 200,
+      width: 180,
       fixed: 'right',
       render: (_, record) => <Space wrap size={0}>{getActionButtons(record)}</Space>,
     },
@@ -337,7 +372,7 @@ const TransferPage = () => {
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            onClick={() => setCreateModalVisible(true)}
+            onClick={handleOpenCreateModal}
             disabled={inUseAssets.length === 0}
           >
             发起调拨
@@ -374,16 +409,22 @@ const TransferPage = () => {
         onCancel={() => {
           setCreateModalVisible(false);
           createForm.resetFields();
+          setSelectedAssetId(undefined);
         }}
         footer={[
-          <Button key="cancel" onClick={() => setCreateModalVisible(false)}>
+          <Button key="cancel" onClick={() => {
+            setCreateModalVisible(false);
+            createForm.resetFields();
+            setSelectedAssetId(undefined);
+          }}>
             取消
           </Button>,
           <Button key="submit" type="primary" onClick={handleCreate}>
             提交
           </Button>,
         ]}
-        width={500}
+        width={560}
+        destroyOnClose
       >
         <Form form={createForm} layout="vertical">
           <Form.Item
@@ -391,25 +432,62 @@ const TransferPage = () => {
             label="选择资产"
             rules={[{ required: true, message: '请选择要调拨的资产' }]}
           >
-            <Select placeholder="请选择使用中的资产" showSearch optionFilterProp="children">
+            <Select
+              placeholder="请选择使用中的资产"
+              showSearch
+              optionFilterProp="children"
+              onChange={handleAssetChange}
+            >
               {inUseAssets.map((asset) => (
                 <Option key={asset.id} value={asset.id}>
-                  {asset.name} ({asset.assetNo}) - {getUserName(asset.currentUserId || '')}/{getDepartmentName(asset.currentDepartmentId || '')}
+                  {asset.name} ({asset.assetNo})
                 </Option>
               ))}
             </Select>
           </Form.Item>
+
+          {selectedAsset && (
+            <>
+              <Divider style={{ margin: '8px 0 16px' }}>
+                <span className="text-gray-500 text-xs">当前归属信息</span>
+              </Divider>
+              <div className="mb-4 p-4 bg-blue-50 rounded-lg border border-blue-100">
+                <Row gutter={[16, 8]}>
+                  <Col xs={12}>
+                    <div className="text-xs text-gray-500 mb-1">当前使用人</div>
+                    <div className="font-medium text-blue-800">
+                      {getUserName(selectedAsset.currentUserId || '')}
+                    </div>
+                  </Col>
+                  <Col xs={12}>
+                    <div className="text-xs text-gray-500 mb-1">当前部门</div>
+                    <div className="font-medium text-blue-800">
+                      {getDepartmentName(selectedAsset.currentDepartmentId || '')}
+                    </div>
+                  </Col>
+                </Row>
+              </div>
+            </>
+          )}
+
           <Form.Item
             name="toUserId"
-            label="接收人"
+            label="接收人（已排除当前使用人）"
             rules={[{ required: true, message: '请选择接收人' }]}
           >
-            <Select placeholder="请选择接收人" showSearch optionFilterProp="children">
-              {users.map((user) => (
-                <Option key={user.id} value={user.id}>
-                  {user.name} - {getDepartmentName(user.departmentId)}
-                </Option>
-              ))}
+            <Select
+              placeholder="请选择接收人"
+              showSearch
+              optionFilterProp="children"
+              disabled={!selectedAssetId}
+            >
+              {users
+                .filter((u) => u.id !== selectedAsset?.currentUserId)
+                .map((user) => (
+                  <Option key={user.id} value={user.id}>
+                    {user.name} - {getDepartmentName(user.departmentId)}
+                  </Option>
+                ))}
             </Select>
           </Form.Item>
           <Form.Item name="reason" label="调拨原因">
@@ -430,45 +508,68 @@ const TransferPage = () => {
             关闭
           </Button>,
         ]}
-        width={600}
+        width={640}
       >
         {currentTransfer && (
-          <Descriptions column={1} bordered size="small">
-            <Descriptions.Item label="资产编号">
-              {getAssetInfo(currentTransfer.assetId)?.assetNo || '-'}
-            </Descriptions.Item>
-            <Descriptions.Item label="资产名称">
-              {getAssetInfo(currentTransfer.assetId)?.name || '-'}
-            </Descriptions.Item>
-            <Descriptions.Item label="调出人">
-              {getUserName(currentTransfer.fromUserId)}
-            </Descriptions.Item>
-            <Descriptions.Item label="调出部门">
-              {getDepartmentName(currentTransfer.fromDepartmentId)}
-            </Descriptions.Item>
-            <Descriptions.Item label="调入人">
-              {getUserName(currentTransfer.toUserId)}
-            </Descriptions.Item>
-            <Descriptions.Item label="调入部门">
-              {getDepartmentName(currentTransfer.toDepartmentId)}
-            </Descriptions.Item>
-            <Descriptions.Item label="申请日期">
-              {formatDate(currentTransfer.applyDate)}
-            </Descriptions.Item>
-            <Descriptions.Item label="状态">
-              <Tag color={TRANSFER_STATUS[currentTransfer.status].color}>
-                {TRANSFER_STATUS[currentTransfer.status].label}
-              </Tag>
-            </Descriptions.Item>
-            {currentTransfer.confirmedAt && (
-              <Descriptions.Item label="确认日期">
-                {formatDate(currentTransfer.confirmedAt)}
+          <>
+            <div className="mb-4 p-3 bg-gray-50 rounded">
+              <div className="text-sm text-gray-500 mb-1">资产信息</div>
+              <div className="font-medium">
+                {getAssetInfo(currentTransfer.assetId)?.name || '-'}
+                <span className="font-mono ml-2 text-gray-500">
+                  ({getAssetInfo(currentTransfer.assetId)?.assetNo || '-'})
+                </span>
+              </div>
+            </div>
+            <Descriptions column={2} bordered size="small">
+              <Descriptions.Item label="调出人">
+                <Space>
+                  <SwapOutlined className="text-orange-500" />
+                  <span>{getUserName(currentTransfer.fromUserId)}</span>
+                </Space>
               </Descriptions.Item>
-            )}
-            {currentTransfer.reason && (
-              <Descriptions.Item label="调拨原因">{currentTransfer.reason}</Descriptions.Item>
-            )}
-          </Descriptions>
+              <Descriptions.Item label="调入人">
+                <Space>
+                  <SwapOutlined className="text-green-500 rotate-180" />
+                  <span>{getUserName(currentTransfer.toUserId)}</span>
+                </Space>
+              </Descriptions.Item>
+              <Descriptions.Item label="调出部门">
+                {getDepartmentName(currentTransfer.fromDepartmentId)}
+              </Descriptions.Item>
+              <Descriptions.Item label="调入部门">
+                {getDepartmentName(currentTransfer.toDepartmentId)}
+              </Descriptions.Item>
+              <Descriptions.Item label="申请日期">
+                {formatDate(currentTransfer.applyDate)}
+              </Descriptions.Item>
+              <Descriptions.Item label="状态">
+                <Tag color={TRANSFER_STATUS[currentTransfer.status].color}>
+                  {TRANSFER_STATUS[currentTransfer.status].label}
+                </Tag>
+              </Descriptions.Item>
+              {currentTransfer.approvedAt && (
+                <Descriptions.Item label="审核日期">
+                  {formatDate(currentTransfer.approvedAt)}
+                </Descriptions.Item>
+              )}
+              {currentTransfer.confirmedAt && (
+                <Descriptions.Item label="确认日期">
+                  {formatDate(currentTransfer.confirmedAt)}
+                </Descriptions.Item>
+              )}
+              {currentTransfer.reason && (
+                <Descriptions.Item label="调拨原因" span={2}>
+                  {currentTransfer.reason}
+                </Descriptions.Item>
+              )}
+              {currentTransfer.rejectReason && (
+                <Descriptions.Item label="拒绝原因" span={2}>
+                  {currentTransfer.rejectReason}
+                </Descriptions.Item>
+              )}
+            </Descriptions>
+          </>
         )}
       </Modal>
 

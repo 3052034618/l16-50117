@@ -85,6 +85,9 @@ export interface TransferRecord {
   toDepartmentId: string;
   applyDate: string;
   confirmedAt?: string;
+  approvedAt?: string;
+  approvedBy?: string;
+  rejectReason?: string;
   status: TransferStatus;
   reason?: string;
 }

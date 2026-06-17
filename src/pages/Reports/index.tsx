@@ -48,6 +48,9 @@ interface InventoryDiff extends InventoryDetail {
   planName: string;
   assetNo: string;
   assetName: string;
+  systemUser: string;
+  systemLocation: string;
+  actualUser: string;
 }
 
 interface CategorySummary {
@@ -67,6 +70,8 @@ const Reports = () => {
     depreciationRecords,
     inventoryPlans,
     inventoryDetails,
+    users,
+    departments,
   } = useAppStore();
 
   const [activeTab, setActiveTab] = useState<string>('asset-ledger');
@@ -89,6 +94,16 @@ const Reports = () => {
     ) : (
       <Tag>{status}</Tag>
     );
+  };
+
+  const getUserName = (userId?: string) => {
+    if (!userId) return '-';
+    return users.find(u => u.id === userId)?.name || '-';
+  };
+
+  const getDepartmentName = (departmentId?: string) => {
+    if (!departmentId) return '-';
+    return departments.find(d => d.id === departmentId)?.name || '-';
   };
 
   const getCheckResultTag = (result: CheckResultType) => {
@@ -238,9 +253,12 @@ const Reports = () => {
           planName: plan?.name || '-',
           assetNo: asset?.assetNo || '-',
           assetName: asset?.name || '-',
+          systemUser: getUserName(asset?.currentUserId),
+          systemLocation: asset?.location || '-',
+          actualUser: detail.actualUserId ? getUserName(detail.actualUserId) : '-',
         } as InventoryDiff;
       });
-  }, [inventoryDetails, inventoryPlans, assets]);
+  }, [inventoryDetails, inventoryPlans, assets, users, departments]);
 
   const checkResultPieOption = useMemo((): EChartsOption => {
     const resultCounts = {
@@ -426,6 +444,10 @@ const Reports = () => {
       资产编号: item.assetNo,
       名称: item.assetName,
       系统状态: ASSET_STATUS[item.systemStatus as keyof typeof ASSET_STATUS]?.label || item.systemStatus,
+      系统使用人: item.systemUser,
+      实际使用人: item.actualUser,
+      系统位置: item.systemLocation,
+      实际位置: item.actualLocation || '-',
       盘点结果: CHECK_RESULT[item.checkResult].label,
       差异说明: item.remark || '-',
     }));
@@ -618,6 +640,40 @@ const Reports = () => {
       key: 'systemStatus',
       width: 100,
       render: (status) => getStatusTag(status),
+    },
+    {
+      title: '系统使用人',
+      dataIndex: 'systemUser',
+      key: 'systemUser',
+      width: 120,
+    },
+    {
+      title: '实际使用人',
+      dataIndex: 'actualUser',
+      key: 'actualUser',
+      width: 120,
+      render: (text, record) => {
+        const diff = record.systemUser !== text;
+        return <span className={diff ? 'text-red-600 font-medium' : ''}>{text}</span>;
+      },
+    },
+    {
+      title: '系统位置',
+      dataIndex: 'systemLocation',
+      key: 'systemLocation',
+      width: 140,
+      ellipsis: true,
+    },
+    {
+      title: '实际位置',
+      dataIndex: 'actualLocation',
+      key: 'actualLocation',
+      width: 140,
+      ellipsis: true,
+      render: (text, record) => {
+        const diff = record.systemLocation !== (text || '-');
+        return <span className={diff ? 'text-red-600 font-medium' : ''}>{text || '-'}</span>;
+      },
     },
     {
       title: '盘点结果',

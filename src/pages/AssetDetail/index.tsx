@@ -15,6 +15,8 @@ import {
   Row,
   Col,
   App,
+  Tabs,
+  Tooltip,
 } from 'antd';
 import {
   EditOutlined,
@@ -27,10 +29,18 @@ import {
   InboxOutlined,
   SendOutlined,
   StopOutlined,
+  HistoryOutlined,
+  FileTextOutlined,
+  UserSwitchOutlined,
 } from '@ant-design/icons';
 import { QRCodeSVG } from 'qrcode.react';
 import useAppStore from '@/store';
-import { formatCurrency, formatDate, generateQRCodeData } from '@/utils/helpers';
+import {
+  formatCurrency,
+  formatDate,
+  generateQRCodeData,
+  downloadJson,
+} from '@/utils/helpers';
 import {
   ASSET_STATUS,
   DEPRECIATION_METHODS,
@@ -43,6 +53,18 @@ import type { DepreciationRecord } from '@/types';
 
 const { TextArea } = Input;
 const { Option } = Select;
+
+interface OwnershipRecord {
+  key: string;
+  time: string;
+  type: 'create' | 'allocate' | 'transfer' | 'scrap';
+  fromDepartment: string;
+  fromUser: string;
+  toDepartment: string;
+  toUser: string;
+  description: string;
+  status: string;
+}
 
 const AssetDetail = () => {
   const { id } = useParams<{ id: string }>();
@@ -120,7 +142,7 @@ const AssetDetail = () => {
           key: `alloc-${alloc.id}`,
           time: alloc.allocationDate,
           title: '资产分配',
-          description: `分配给 ${dept?.name} - ${user?.name}，状态：${ALLOCATION_STATUS[alloc.status].label}`,
+          description: `分配到 ${dept?.name} - ${user?.name}，状态：${ALLOCATION_STATUS[alloc.status].label}`,
           color: ALLOCATION_STATUS[alloc.status].color,
           icon: <SendOutlined />,
         });
@@ -130,12 +152,14 @@ const AssetDetail = () => {
       .filter((t) => t.assetId === id)
       .forEach((transfer) => {
         const fromUser = users.find((u) => u.id === transfer.fromUserId);
+        const fromDept = departments.find((d) => d.id === transfer.fromDepartmentId);
         const toUser = users.find((u) => u.id === transfer.toUserId);
+        const toDept = departments.find((d) => d.id === transfer.toDepartmentId);
         events.push({
           key: `transfer-${transfer.id}`,
           time: transfer.applyDate,
           title: '资产调拨',
-          description: `${fromUser?.name} → ${toUser?.name}，原因：${transfer.reason || '无'}，状态：${TRANSFER_STATUS[transfer.status].label}`,
+          description: `${fromUser?.name || '-'}/${fromDept?.name || '-'} → ${toUser?.name || '-'}/${toDept?.name || '-'}，原因：${transfer.reason || '无'}，状态：${TRANSFER_STATUS[transfer.status].label}`,
           color: TRANSFER_STATUS[transfer.status].color,
           icon: <SwapOutlined />,
         });
@@ -149,13 +173,90 @@ const AssetDetail = () => {
           key: `scrap-${scrap.id}`,
           time: scrap.applyDate,
           title: '资产报废',
-          description: `申请人：${applyUser?.name}，原因：${scrap.reason}，状态：${SCRAP_STATUS[scrap.status].label}`,
+          description: `申请人：${applyUser?.name}，原因：${scrap.reason}，状态：${SCRAP_STATUS[scrap.status].label}${scrap.status === 'approved' ? `，残值：${formatCurrency(scrap.residualIncome || 0)}` : ''}`,
           color: SCRAP_STATUS[scrap.status].color,
           icon: <StopOutlined />,
         });
       });
 
     return events.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+  }, [id, asset, allocations, transfers, scraps, users, departments]);
+
+  const ownershipHistory = useMemo((): OwnershipRecord[] => {
+    const records: OwnershipRecord[] = [];
+
+    if (!asset) return records;
+
+    records.push({
+      key: 'create',
+      time: asset.createdAt,
+      type: 'create',
+      fromDepartment: '-',
+      fromUser: '-',
+      toDepartment: '在库',
+      toUser: '-',
+      description: '资产入库',
+      status: ASSET_STATUS['in-stock'].label,
+    });
+
+    allocations
+      .filter((a) => a.assetId === id)
+      .sort((a, b) => new Date(a.allocationDate).getTime() - new Date(b.allocationDate).getTime())
+      .forEach((alloc) => {
+        const user = users.find((u) => u.id === alloc.userId);
+        const dept = departments.find((d) => d.id === alloc.departmentId);
+        records.push({
+          key: `alloc-${alloc.id}`,
+          time: alloc.allocationDate,
+          type: 'allocate',
+          fromDepartment: records[records.length - 1]?.toDepartment || '-',
+          fromUser: records[records.length - 1]?.toUser || '-',
+          toDepartment: dept?.name || '-',
+          toUser: user?.name || '-',
+          description: '资产分配领用',
+          status: ALLOCATION_STATUS[alloc.status].label,
+        });
+      });
+
+    transfers
+      .filter((t) => t.assetId === id)
+      .sort((a, b) => new Date(a.applyDate).getTime() - new Date(b.applyDate).getTime())
+      .forEach((transfer) => {
+        const fromUser = users.find((u) => u.id === transfer.fromUserId);
+        const fromDept = departments.find((d) => d.id === transfer.fromDepartmentId);
+        const toUser = users.find((u) => u.id === transfer.toUserId);
+        const toDept = departments.find((d) => d.id === transfer.toDepartmentId);
+        records.push({
+          key: `transfer-${transfer.id}`,
+          time: transfer.applyDate,
+          type: 'transfer',
+          fromDepartment: fromDept?.name || '-',
+          fromUser: fromUser?.name || '-',
+          toDepartment: toDept?.name || '-',
+          toUser: toUser?.name || '-',
+          description: transfer.reason ? `调拨：${transfer.reason}` : '资产调拨',
+          status: TRANSFER_STATUS[transfer.status].label,
+        });
+      });
+
+    scraps
+      .filter((s) => s.assetId === id)
+      .sort((a, b) => new Date(a.applyDate).getTime() - new Date(b.applyDate).getTime())
+      .forEach((scrap) => {
+        records.push({
+          key: `scrap-${scrap.id}`,
+          time: scrap.applyDate,
+          type: 'scrap',
+          fromDepartment: records[records.length - 1]?.toDepartment || '-',
+          fromUser: records[records.length - 1]?.toUser || '-',
+          toDepartment: '已报废',
+          toUser: '-',
+          description: `报废：${scrap.reason}${scrap.status === 'approved' ? `，残值收入 ${formatCurrency(scrap.residualIncome || 0)}` : ''}`,
+          status: SCRAP_STATUS[scrap.status].label,
+        });
+      });
+
+    return records.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
   }, [id, asset, allocations, transfers, scraps, users, departments]);
 
   const depreciationColumns: ColumnsType<DepreciationRecord> = [
@@ -195,6 +296,86 @@ const AssetDetail = () => {
       width: 140,
       align: 'right',
       render: (value) => formatCurrency(value),
+    },
+  ];
+
+  const ownershipColumns: ColumnsType<OwnershipRecord> = [
+    {
+      title: '变更时间',
+      dataIndex: 'time',
+      key: 'time',
+      width: 130,
+      render: (date) => formatDate(date),
+    },
+    {
+      title: '类型',
+      dataIndex: 'type',
+      key: 'type',
+      width: 90,
+      align: 'center',
+      render: (type: OwnershipRecord['type']) => {
+        const config: Record<OwnershipRecord['type'], { label: string; color: string; icon: React.ReactNode }> = {
+          create: { label: '入库', color: 'green', icon: <InboxOutlined /> },
+          allocate: { label: '分配', color: 'blue', icon: <UserOutlined /> },
+          transfer: { label: '调拨', color: 'orange', icon: <SwapOutlined /> },
+          scrap: { label: '报废', color: 'red', icon: <StopOutlined /> },
+        };
+        return <Tag color={config[type].color} icon={config[type].icon}>{config[type].label}</Tag>;
+      },
+    },
+    {
+      title: '原使用人',
+      dataIndex: 'fromUser',
+      key: 'fromUser',
+      width: 100,
+      render: (text) => text || '-',
+    },
+    {
+      title: '原部门',
+      dataIndex: 'fromDepartment',
+      key: 'fromDepartment',
+      width: 120,
+      render: (text) => text || '-',
+    },
+    {
+      title: '归属变更',
+      key: 'arrow',
+      width: 50,
+      align: 'center',
+      render: () => <SwapOutlined className="text-blue-500" />,
+    },
+    {
+      title: '新使用人',
+      dataIndex: 'toUser',
+      key: 'toUser',
+      width: 100,
+      render: (text) => text || '-',
+    },
+    {
+      title: '新部门',
+      dataIndex: 'toDepartment',
+      key: 'toDepartment',
+      width: 120,
+      render: (text) => text || '-',
+    },
+    {
+      title: '说明',
+      dataIndex: 'description',
+      key: 'description',
+      ellipsis: true,
+      render: (text) => (
+        <Tooltip title={text}>
+          <span>{text}</span>
+        </Tooltip>
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 90,
+      align: 'center',
+      render: (text) => <span className="text-gray-600">{text}</span>,
     },
   ];
 
@@ -257,6 +438,22 @@ const AssetDetail = () => {
     printWindow.document.close();
   };
 
+  const handleExportHistory = () => {
+    if (!asset) return;
+    const exportData = ownershipHistory.map((item) => ({
+      变更时间: formatDate(item.time),
+      变更类型: item.type === 'create' ? '入库' : item.type === 'allocate' ? '分配' : item.type === 'transfer' ? '调拨' : '报废',
+      原使用人: item.fromUser,
+      原部门: item.fromDepartment,
+      新使用人: item.toUser,
+      新部门: item.toDepartment,
+      说明: item.description,
+      状态: item.status,
+    }));
+    downloadJson(exportData, `归属变更履历_${asset.assetNo}_${formatDate(new Date(), 'YYYYMMDD')}.json`);
+    message.success('履历导出成功');
+  };
+
   const handleAllocateSubmit = async () => {
     try {
       const values = await allocateForm.validateFields();
@@ -312,6 +509,89 @@ const AssetDetail = () => {
 
   const qrCodeValue = generateQRCodeData(asset.id, asset.assetNo);
 
+  const detailTabItems = [
+    {
+      key: 'ownership',
+      label: (
+        <span>
+          <UserSwitchOutlined />
+          归属变更历史
+        </span>
+      ),
+      children: (
+        <Card
+          size="small"
+          extra={
+            <Button icon={<DownloadOutlined />} onClick={handleExportHistory}>
+              导出履历
+            </Button>
+          }
+          className="p-0 shadow-none border-none"
+        >
+          <Table
+            size="small"
+            columns={ownershipColumns}
+            dataSource={ownershipHistory}
+            pagination={false}
+            scroll={{ y: 380 }}
+          />
+        </Card>
+      ),
+    },
+    {
+      key: 'lifecycle',
+      label: (
+        <span>
+          <HistoryOutlined />
+          生命周期
+        </span>
+      ),
+      children: (
+        <Card size="small" className="p-0 shadow-none border-none">
+          <Timeline
+            mode="left"
+            items={lifecycleEvents.map((event) => ({
+              key: event.key,
+              color: event.color,
+              dot: event.icon,
+              children: (
+                <div>
+                  <div className="font-medium">{event.title}</div>
+                  <div className="text-sm text-gray-500">{event.description}</div>
+                  <div className="text-xs text-gray-400 mt-1">{formatDate(event.time)}</div>
+                </div>
+              ),
+            }))}
+          />
+        </Card>
+      ),
+    },
+    {
+      key: 'depreciation',
+      label: (
+        <span>
+          <FileTextOutlined />
+          折旧明细
+        </span>
+      ),
+      children: (
+        <Card size="small" className="p-0 shadow-none border-none">
+          <Table
+            size="small"
+            columns={depreciationColumns}
+            dataSource={depreciationRecords}
+            rowKey="id"
+            pagination={{
+              pageSize: 10,
+              showSizeChanger: false,
+            }}
+            scroll={{ y: 380 }}
+          />
+        </Card>
+      ),
+    },
+  ];
+
   return (
     <div className="p-6">
       <div className="mb-6">
@@ -321,6 +601,7 @@ const AssetDetail = () => {
           </Button>
           <h1 className="text-2xl font-bold m-0 inline-block">{asset.name}</h1>
           <Tag color={ASSET_STATUS[asset.status].color}>{ASSET_STATUS[asset.status].label}</Tag>
+          <span className="font-mono text-gray-400">{asset.assetNo}</span>
         </Space>
       </div>
 
@@ -335,21 +616,28 @@ const AssetDetail = () => {
               <Descriptions.Item label="生产厂家">{asset.manufacturer || '-'}</Descriptions.Item>
               <Descriptions.Item label="购置日期">{formatDate(asset.purchaseDate)}</Descriptions.Item>
               <Descriptions.Item label="存放位置">{asset.location || '-'}</Descriptions.Item>
+              {asset.scrapDate && (
+                <Descriptions.Item label="报废日期" className="text-red-600">{formatDate(asset.scrapDate)}</Descriptions.Item>
+              )}
             </Descriptions>
           </Card>
         </Col>
 
         <Col xs={24} lg={8}>
-          <Card title="二维码" size="small" extra={
-            <Space>
-              <Button size="small" icon={<DownloadOutlined />} onClick={handleDownloadQRCode}>
-                下载
-              </Button>
-              <Button size="small" icon={<PrinterOutlined />} onClick={handlePrintQRCode}>
-                打印
-              </Button>
-            </Space>
-          }>
+          <Card
+            title="二维码"
+            size="small"
+            extra={
+              <Space>
+                <Button size="small" icon={<DownloadOutlined />} onClick={handleDownloadQRCode}>
+                  下载
+                </Button>
+                <Button size="small" icon={<PrinterOutlined />} onClick={handlePrintQRCode}>
+                  打印
+                </Button>
+              </Space>
+            }
+          >
             <div className="flex flex-col items-center justify-center py-4" ref={qrCodeRef}>
               <QRCodeSVG value={qrCodeValue} size={160} level="M" includeMargin />
               <div className="mt-4 text-sm text-gray-600 font-medium">{asset.assetNo}</div>
@@ -368,7 +656,7 @@ const AssetDetail = () => {
               <Descriptions.Item label="折旧方法">{DEPRECIATION_METHODS[asset.depreciationMethod].label}</Descriptions.Item>
               <Descriptions.Item label="使用年限">{asset.usefulLife} 个月</Descriptions.Item>
               <Descriptions.Item label="累计折旧">{formatCurrency(asset.accumulatedDepreciation)}</Descriptions.Item>
-              <Descriptions.Item label="当前净值">{formatCurrency(asset.currentValue)}</Descriptions.Item>
+              <Descriptions.Item label="当前净值"><span className="text-green-600 font-semibold">{formatCurrency(asset.currentValue)}</span></Descriptions.Item>
             </Descriptions>
           </Card>
         </Col>
@@ -381,8 +669,12 @@ const AssetDetail = () => {
                   {ASSET_STATUS[asset.status].label}
                 </Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="使用人">{currentUserInfo?.name || '-'}</Descriptions.Item>
-              <Descriptions.Item label="所属部门">{currentDepartment?.name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="使用人">
+                {currentUserInfo?.name || <span className="text-gray-400">未分配</span>}
+              </Descriptions.Item>
+              <Descriptions.Item label="所属部门">
+                {currentDepartment?.name || <span className="text-gray-400">在库</span>}
+              </Descriptions.Item>
               <Descriptions.Item label="创建时间">{formatDate(asset.createdAt)}</Descriptions.Item>
             </Descriptions>
           </Card>
@@ -432,43 +724,9 @@ const AssetDetail = () => {
         </Col>
       </Row>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={10}>
-          <Card title="生命周期" size="small">
-            <Timeline
-              mode="left"
-              items={lifecycleEvents.map((event) => ({
-                key: event.key,
-                color: event.color,
-                dot: event.icon,
-                children: (
-                  <div>
-                    <div className="font-medium">{event.title}</div>
-                    <div className="text-sm text-gray-500">{event.description}</div>
-                    <div className="text-xs text-gray-400 mt-1">{formatDate(event.time)}</div>
-                  </div>
-                ),
-              }))}
-            />
-          </Card>
-        </Col>
-
-        <Col xs={24} lg={14}>
-          <Card title="折旧明细" size="small">
-            <Table
-              size="small"
-              columns={depreciationColumns}
-              dataSource={depreciationRecords}
-              rowKey="id"
-              pagination={{
-                pageSize: 10,
-                showSizeChanger: false,
-              }}
-              scroll={{ y: 400 }}
-            />
-          </Card>
-        </Col>
-      </Row>
+      <Card size="small" className="p-0">
+        <Tabs defaultActiveKey="ownership" items={detailTabItems} />
+      </Card>
 
       <Modal
         title="资产分配"
@@ -529,7 +787,7 @@ const AssetDetail = () => {
         <Form form={transferForm} layout="vertical">
           <Form.Item
             name="toUserId"
-            label="接收人"
+            label="接收人（已排除当前使用人）"
             rules={[{ required: true, message: '请选择接收人' }]}
           >
             <Select placeholder="请选择接收人" showSearch optionFilterProp="children">
