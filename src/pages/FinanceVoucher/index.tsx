@@ -174,6 +174,18 @@ const FinanceVoucherPage = () => {
     setFilterStatus(undefined);
   };
 
+  const handleConfirmVoucherFromList = (voucher: FinanceVoucher) => {
+    Modal.confirm({
+      title: voucher.status === 'revoked' ? '重新入账' : '确认入账',
+      content: `确定要将凭证 ${voucher.voucherNo} ${voucher.status === 'revoked' ? '重新入账' : '确认入账'}吗？`,
+      onOk: () => {
+        confirmVoucher(voucher.id, voucher.type);
+        setRefreshKey((k) => k + 1);
+        message.success(voucher.status === 'revoked' ? '凭证已重新入账' : '凭证已确认入账');
+      },
+    });
+  };
+
   const getDetailFooter = () => {
     if (!currentVoucher) return null;
     const buttons = [];
@@ -186,6 +198,13 @@ const FinanceVoucherPage = () => {
       buttons.push(
         <Button key="confirm" type="primary" icon={<CheckCircleOutlined />} onClick={handleConfirmVoucher}>
           确认入账
+        </Button>
+      );
+    }
+    if (currentVoucher.status === 'revoked') {
+      buttons.push(
+        <Button key="reconfirm" type="primary" icon={<CheckCircleOutlined />} onClick={handleConfirmVoucher}>
+          重新入账
         </Button>
       );
     }
@@ -297,12 +316,25 @@ const FinanceVoucherPage = () => {
     {
       title: '操作',
       key: 'actions',
-      width: 120,
+      width: 220,
       fixed: 'right',
       render: (_, record) => (
-        <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => handleViewDetail(record)}>
-          查看详情
-        </Button>
+        <Space wrap size={0}>
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => handleViewDetail(record)}>
+            查看详情
+          </Button>
+          {record.status === 'revoked' && (
+            <Button
+              type="link"
+              size="small"
+              icon={<CheckCircleOutlined />}
+              className="text-green-600"
+              onClick={() => handleConfirmVoucherFromList(record)}
+            >
+              重新入账
+            </Button>
+          )}
+        </Space>
       ),
     },
   ];

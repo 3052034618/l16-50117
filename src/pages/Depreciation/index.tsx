@@ -748,9 +748,14 @@ const Depreciation = () => {
                 >
                   {currentVoucher ? '重新生成草稿' : '生成凭证草稿'}
                 </Button>
-                {currentVoucher && currentVoucher.status === 'draft' && (
+                {(currentVoucher && currentVoucher.status === 'draft') && (
                   <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleConfirmVoucher}>
                     确认入账
+                  </Button>
+                )}
+                {currentVoucher && currentVoucher.status === 'revoked' && (
+                  <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleConfirmVoucher}>
+                    重新入账
                   </Button>
                 )}
                 {currentVoucher && currentVoucher.status === 'posted' && (

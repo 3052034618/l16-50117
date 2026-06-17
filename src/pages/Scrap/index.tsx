@@ -413,6 +413,13 @@ const ScrapPage = () => {
         </Button>
       );
     }
+    if (currentVoucher.status === 'revoked') {
+      buttons.push(
+        <Button key="reconfirm" type="primary" icon={<CheckCircleOutlined />} onClick={handleConfirmVoucher}>
+          重新入账
+        </Button>
+      );
+    }
     if (currentVoucher.status === 'posted') {
       buttons.push(
         <Popconfirm

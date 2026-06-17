@@ -477,7 +477,27 @@ const useAppStore = create<AppState>()(
       createDepreciationVoucher: (period, dimension) => {
         const { depreciationVouchers, depreciationRecords, assets, categories, departments, currentUser } = get();
         const existing = depreciationVouchers.find(v => v.period === period && v.summaryDimension === dimension);
-        if (existing) return existing;
+        if (existing) {
+          if (existing.status === 'revoked') {
+            const updated = {
+              ...existing,
+              status: 'draft' as const,
+              createdAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+              createdBy: currentUser?.id || existing.createdBy,
+              revokedAt: undefined,
+              revokedBy: undefined,
+              postedAt: undefined,
+              postedBy: undefined,
+            };
+            set({
+              depreciationVouchers: depreciationVouchers.map(v =>
+                v.id === existing.id ? updated : v
+              ),
+            });
+            return updated;
+          }
+          return existing;
+        }
 
         const periodRecords = depreciationRecords.filter(r => r.period === period);
         const entries: VoucherEntry[] = [];
@@ -889,6 +909,8 @@ const useAppStore = create<AppState>()(
         scraps: state.scraps,
         inventoryPlans: state.inventoryPlans,
         inventoryDetails: state.inventoryDetails,
+        depreciationVouchers: state.depreciationVouchers,
+        scrapVouchers: state.scrapVouchers,
         currentUser: state.currentUser,
         initialized: state.initialized,
       }),

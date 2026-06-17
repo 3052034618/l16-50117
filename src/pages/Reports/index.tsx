@@ -12,6 +12,9 @@ import {
   Statistic,
   Tag,
   message,
+  Modal,
+  Descriptions,
+  Popconfirm,
 } from 'antd';
 import {
   DownloadOutlined,
@@ -21,6 +24,11 @@ import {
   PieChartOutlined,
   FileTextOutlined,
   FundOutlined,
+  EyeOutlined,
+  CheckCircleOutlined,
+  UnlockOutlined,
+  LineChartOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import dayjs from 'dayjs';
@@ -29,10 +37,32 @@ import type { EChartsOption } from 'echarts';
 import useAppStore from '@/store';
 import { formatCurrency, formatDate, downloadJson, getMonthList } from '@/utils/helpers';
 import { ASSET_STATUS, CHECK_RESULT, DEPRECIATION_METHODS } from '@/utils/constants';
-import type { Asset, DepreciationRecord, InventoryDetail, CheckResult as CheckResultType } from '@/types';
+import type { Asset, DepreciationRecord, InventoryDetail, CheckResult as CheckResultType, FinanceVoucher, DepreciationVoucher, ScrapVoucher, VoucherStatus, VoucherType, VoucherEntry } from '@/types';
 
 const { Option } = Select;
 const { RangePicker } = DatePicker;
+
+const VOUCHER_STATUS_COLORS: Record<VoucherStatus, string> = {
+  draft: 'blue',
+  posted: 'green',
+  revoked: 'default',
+};
+
+const VOUCHER_STATUS_LABELS: Record<VoucherStatus, string> = {
+  draft: '草稿',
+  posted: '已入账',
+  revoked: '已撤回',
+};
+
+const VOUCHER_TYPE_LABELS: Record<VoucherType, string> = {
+  depreciation: '折旧',
+  scrap: '报废',
+};
+
+const VOUCHER_TYPE_COLORS: Record<VoucherType, string> = {
+  depreciation: 'purple',
+  scrap: 'red',
+};
 
 interface AssetLedger extends Asset {
   categoryName: string;
@@ -72,6 +102,11 @@ const Reports = () => {
     inventoryDetails,
     users,
     departments,
+    depreciationVouchers,
+    scrapVouchers,
+    getAllVouchers,
+    confirmVoucher,
+    revokeVoucher,
   } = useAppStore();
 
   const [activeTab, setActiveTab] = useState<string>('asset-ledger');
@@ -82,6 +117,13 @@ const Reports = () => {
 
   const [depreciationFilterPeriod, setDepreciationFilterPeriod] = useState<string>();
   const [depreciationFilterCategory, setDepreciationFilterCategory] = useState<string>();
+
+  const [voucherFilterPeriod, setVoucherFilterPeriod] = useState<string>();
+  const [voucherFilterType, setVoucherFilterType] = useState<VoucherType | 'all'>('all');
+  const [voucherFilterStatus, setVoucherFilterStatus] = useState<VoucherStatus | 'all'>('all');
+  const [voucherDetailModalVisible, setVoucherDetailModalVisible] = useState(false);
+  const [currentVoucherDetail, setCurrentVoucherDetail] = useState<FinanceVoucher | null>(null);
+  const [, setVoucherRefreshKey] = useState(0);
 
   const getCategoryName = (categoryId: string) => {
     return categories.find((c) => c.id === categoryId)?.name || '-';
@@ -406,6 +448,465 @@ const Reports = () => {
       ],
     };
   }, [categorySummaryData]);
+
+  const filteredVoucherList = useMemo((): FinanceVoucher[] => {
+    const all = getAllVouchers();
+    return all.filter((voucher) => {
+      if (voucherFilterPeriod && voucher.period !== voucherFilterPeriod) return false;
+      if (voucherFilterType !== 'all' && voucher.type !== voucherFilterType) return false;
+      if (voucherFilterStatus !== 'all' && voucher.status !== voucherFilterStatus) return false;
+      return true;
+    });
+  }, [getAllVouchers, voucherFilterPeriod, voucherFilterType, voucherFilterStatus]);
+
+  const getVoucherUserName = (userId?: string): string => {
+    if (!userId) return '-';
+    return users.find((u) => u.id === userId)?.name || '-';
+  };
+
+  const handleResetVoucherFilters = (): void => {
+    setVoucherFilterPeriod(undefined);
+    setVoucherFilterType('all');
+    setVoucherFilterStatus('all');
+  };
+
+  const handleViewVoucherDetail = (voucher: FinanceVoucher): void => {
+    setCurrentVoucherDetail(voucher);
+    setVoucherDetailModalVisible(true);
+  };
+
+  const handleConfirmVoucher = (): void => {
+    if (!currentVoucherDetail) return;
+    Modal.confirm({
+      title: currentVoucherDetail.status === 'revoked' ? '重新入账' : '确认入账',
+      content: `确定要将凭证 ${currentVoucherDetail.voucherNo} ${currentVoucherDetail.status === 'revoked' ? '重新入账' : '确认入账'}吗？`,
+      onOk: () => {
+        confirmVoucher(currentVoucherDetail.id, currentVoucherDetail.type);
+        setVoucherRefreshKey((k) => k + 1);
+        const store = useAppStore.getState();
+        let updated: FinanceVoucher | undefined;
+        if (currentVoucherDetail.type === 'depreciation') {
+          updated = store.depreciationVouchers.find(
+            (v: DepreciationVoucher) => v.id === currentVoucherDetail.id
+          );
+        } else {
+          updated = store.scrapVouchers.find(
+            (v: ScrapVoucher) => v.id === currentVoucherDetail.id
+          );
+        }
+        setCurrentVoucherDetail(updated || null);
+        message.success(currentVoucherDetail.status === 'revoked' ? '凭证已重新入账' : '凭证已确认入账');
+      },
+    });
+  };
+
+  const handleRevokeVoucher = (): void => {
+    if (!currentVoucherDetail) return;
+    Modal.confirm({
+      title: '撤回凭证',
+      content: `确定要撤回凭证 ${currentVoucherDetail.voucherNo} 吗？`,
+      onOk: () => {
+        revokeVoucher(currentVoucherDetail.id, currentVoucherDetail.type);
+        setVoucherRefreshKey((k) => k + 1);
+        const store = useAppStore.getState();
+        let updated: FinanceVoucher | undefined;
+        if (currentVoucherDetail.type === 'depreciation') {
+          updated = store.depreciationVouchers.find(
+            (v: DepreciationVoucher) => v.id === currentVoucherDetail.id
+          );
+        } else {
+          updated = store.scrapVouchers.find(
+            (v: ScrapVoucher) => v.id === currentVoucherDetail.id
+          );
+        }
+        setCurrentVoucherDetail(updated || null);
+        message.success('凭证已撤回');
+      },
+    });
+  };
+
+  const getVoucherDetailFooter = () => {
+    if (!currentVoucherDetail) return null;
+    const buttons = [];
+    buttons.push(
+      <Button key="close" onClick={() => setVoucherDetailModalVisible(false)}>
+        关闭
+      </Button>
+    );
+    if (currentVoucherDetail.status === 'draft') {
+      buttons.push(
+        <Button key="confirm" type="primary" icon={<CheckCircleOutlined />} onClick={handleConfirmVoucher}>
+          确认入账
+        </Button>
+      );
+    }
+    if (currentVoucherDetail.status === 'revoked') {
+      buttons.push(
+        <Button key="reconfirm" type="primary" icon={<CheckCircleOutlined />} onClick={handleConfirmVoucher}>
+          重新入账
+        </Button>
+      );
+    }
+    if (currentVoucherDetail.status === 'posted') {
+      buttons.push(
+        <Popconfirm
+          key="revoke"
+          title="确定要撤回此凭证吗？"
+          description="撤回后将变为草稿状态，可重新修改入账"
+          onConfirm={handleRevokeVoucher}
+        >
+          <Button icon={<UnlockOutlined />}>撤回凭证</Button>
+        </Popconfirm>
+      );
+    }
+    return buttons;
+  };
+
+  const voucherQueryColumns: ColumnsType<FinanceVoucher> = [
+    {
+      title: '凭证编号',
+      dataIndex: 'voucherNo',
+      key: 'voucherNo',
+      width: 220,
+      render: (text) => <span className="font-mono">{text}</span>,
+    },
+    {
+      title: '期间',
+      dataIndex: 'period',
+      key: 'period',
+      width: 110,
+      render: (text) => <span className="font-mono">{text}</span>,
+    },
+    {
+      title: '类型',
+      dataIndex: 'type',
+      key: 'type',
+      width: 100,
+      render: (type: VoucherType) => (
+        <Tag color={VOUCHER_TYPE_COLORS[type]}>
+          {VOUCHER_TYPE_LABELS[type]}
+        </Tag>
+      ),
+    },
+    {
+      title: '关联信息',
+      key: 'related',
+      width: 200,
+      ellipsis: true,
+      render: (_, record) => {
+        if (record.type === 'depreciation') {
+          return (
+            <Space direction="vertical" size={0}>
+              <span className="text-xs text-gray-500">
+                维度：{record.summaryDimension === 'category' ? '按资产类别' : '按使用部门'}
+              </span>
+              <span>共 {record.assetCount} 项资产</span>
+            </Space>
+          );
+        }
+        return (
+          <Space direction="vertical" size={0}>
+            <span className="font-mono text-xs">{record.assetNo}</span>
+            <span>{record.assetName}</span>
+          </Space>
+        );
+      },
+    },
+    {
+      title: '借方合计',
+      dataIndex: 'totalDebit',
+      key: 'totalDebit',
+      width: 140,
+      align: 'right',
+      render: (value) => <span className="text-orange-600 font-medium">{formatCurrency(value)}</span>,
+    },
+    {
+      title: '贷方合计',
+      dataIndex: 'totalCredit',
+      key: 'totalCredit',
+      width: 140,
+      align: 'right',
+      render: (value) => <span className="text-green-600 font-medium">{formatCurrency(value)}</span>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 100,
+      render: (status: VoucherStatus) => (
+        <Tag color={VOUCHER_STATUS_COLORS[status]}>
+          {VOUCHER_STATUS_LABELS[status]}
+        </Tag>
+      ),
+    },
+    {
+      title: '创建人',
+      dataIndex: 'createdBy',
+      key: 'createdBy',
+      width: 100,
+      render: (userId) => getVoucherUserName(userId),
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      width: 170,
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 120,
+      fixed: 'right',
+      render: (_, record) => (
+        <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => handleViewVoucherDetail(record)}>
+          查看详情
+        </Button>
+      ),
+    },
+  ];
+
+  const trendMonths = useMemo((): string[] => {
+    return getMonthList(dayjs().subtract(11, 'month').format('YYYY-MM'), 12);
+  }, []);
+
+  const monthlyDepreciationVoucherOption = useMemo((): EChartsOption => {
+    const monthlyData = trendMonths.map((month) => {
+      const total = depreciationVouchers
+        .filter((v) => v.period === month && v.status === 'posted')
+        .reduce((sum, v) => sum + v.totalDebit, 0);
+      return Math.round(total * 100) / 100;
+    });
+
+    return {
+      title: {
+        text: '月度折旧凭证金额趋势（已入账）',
+        left: 'center',
+        textStyle: { fontSize: 14, fontWeight: 'normal' },
+      },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        formatter: (params: unknown) => {
+          const p = params as Array<{ axisValue: string; value: number }>;
+          return `${p[0].axisValue}<br/>折旧凭证金额: ${formatCurrency(p[0].value)}<br/><span style="color:#999;font-size:12px">点击跳转到凭证查询</span>`;
+        },
+      },
+      grid: {
+        left: '3%',
+        right: '4%',
+        bottom: '12%',
+        top: '18%',
+        containLabel: true,
+      },
+      xAxis: {
+        type: 'category',
+        data: trendMonths,
+        axisLabel: {
+          rotate: 45,
+          fontSize: 10,
+        },
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: {
+          formatter: (value: number) => `¥${(value / 1000).toFixed(0)}k`,
+        },
+      },
+      series: [
+        {
+          name: '折旧凭证金额',
+          type: 'bar',
+          barWidth: '55%',
+          itemStyle: {
+            color: {
+              type: 'linear',
+              x: 0,
+              y: 0,
+              x2: 0,
+              y2: 1,
+              colorStops: [
+                { offset: 0, color: '#722ed1' },
+                { offset: 1, color: '#531dab' },
+              ],
+            },
+            borderRadius: [4, 4, 0, 0],
+          },
+          data: monthlyData,
+        },
+      ],
+    };
+  }, [depreciationVouchers, trendMonths]);
+
+  const monthlyScrapGainLossOption = useMemo((): EChartsOption => {
+    const gainData = trendMonths.map((month) => {
+      const total = scrapVouchers
+        .filter((v) => v.period === month && v.status === 'posted' && v.gainLoss >= 0)
+        .reduce((sum, v) => sum + v.gainLoss, 0);
+      return Math.round(total * 100) / 100;
+    });
+
+    const lossData = trendMonths.map((month) => {
+      const total = scrapVouchers
+        .filter((v) => v.period === month && v.status === 'posted' && v.gainLoss < 0)
+        .reduce((sum, v) => sum + Math.abs(v.gainLoss), 0);
+      return Math.round(total * 100) / 100;
+    });
+
+    return {
+      title: {
+        text: '月度报废凭证损益趋势（已入账）',
+        left: 'center',
+        textStyle: { fontSize: 14, fontWeight: 'normal' },
+      },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        formatter: (params: unknown) => {
+          const p = params as Array<{ axisValue: string; seriesName: string; value: number }>;
+          let result = `${p[0]?.axisValue || ''}<br/>`;
+          p.forEach((item) => {
+            result += `${item.seriesName}: ${formatCurrency(item.value)}<br/>`;
+          });
+          result += '<span style="color:#999;font-size:12px">点击跳转到凭证查询</span>';
+          return result;
+        },
+      },
+      legend: {
+        data: ['报废收益', '报废损失'],
+        bottom: 10,
+      },
+      grid: {
+        left: '3%',
+        right: '4%',
+        bottom: '18%',
+        top: '18%',
+        containLabel: true,
+      },
+      xAxis: {
+        type: 'category',
+        data: trendMonths,
+        axisLabel: {
+          rotate: 45,
+          fontSize: 10,
+        },
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: {
+          formatter: (value: number) => `¥${(value / 1000).toFixed(0)}k`,
+        },
+      },
+      series: [
+        {
+          name: '报废收益',
+          type: 'bar',
+          stack: 'total',
+          barWidth: '50%',
+          itemStyle: {
+            color: '#52c41a',
+            borderRadius: [4, 4, 0, 0],
+          },
+          data: gainData,
+        },
+        {
+          name: '报废损失',
+          type: 'bar',
+          stack: 'total',
+          barWidth: '50%',
+          itemStyle: {
+            color: '#f5222d',
+            borderRadius: [0, 0, 0, 0],
+          },
+          data: lossData,
+        },
+      ],
+    };
+  }, [scrapVouchers, trendMonths]);
+
+  const monthlyResidualIncomeOption = useMemo((): EChartsOption => {
+    const monthlyData = trendMonths.map((month) => {
+      const total = scrapVouchers
+        .filter((v) => v.period === month && v.status === 'posted')
+        .reduce((sum, v) => sum + v.residualIncome, 0);
+      return Math.round(total * 100) / 100;
+    });
+
+    return {
+      title: {
+        text: '月度残值收入趋势（已入账）',
+        left: 'center',
+        textStyle: { fontSize: 14, fontWeight: 'normal' },
+      },
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params: unknown) => {
+          const p = params as Array<{ axisValue: string; value: number }>;
+          return `${p[0].axisValue}<br/>残值收入: ${formatCurrency(p[0].value)}<br/><span style="color:#999;font-size:12px">点击跳转到凭证查询</span>`;
+        },
+      },
+      grid: {
+        left: '3%',
+        right: '4%',
+        bottom: '12%',
+        top: '18%',
+        containLabel: true,
+      },
+      xAxis: {
+        type: 'category',
+        data: trendMonths,
+        boundaryGap: false,
+        axisLabel: {
+          rotate: 45,
+          fontSize: 10,
+        },
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: {
+          formatter: (value: number) => `¥${(value / 1000).toFixed(0)}k`,
+        },
+      },
+      series: [
+        {
+          name: '残值收入',
+          type: 'line',
+          smooth: true,
+          symbol: 'circle',
+          symbolSize: 6,
+          areaStyle: {
+            color: {
+              type: 'linear',
+              x: 0,
+              y: 0,
+              x2: 0,
+              y2: 1,
+              colorStops: [
+                { offset: 0, color: 'rgba(250, 173, 20, 0.4)' },
+                { offset: 1, color: 'rgba(250, 173, 20, 0.05)' },
+              ],
+            },
+          },
+          lineStyle: {
+            color: '#fa8c16',
+            width: 2,
+          },
+          itemStyle: {
+            color: '#fa8c16',
+          },
+          data: monthlyData,
+        },
+      ],
+    };
+  }, [scrapVouchers, trendMonths]);
+
+  const handleTrendChartClick = (params: unknown): void => {
+    const p = params as { name: string };
+    if (p.name) {
+      setActiveTab('voucher-query');
+      setVoucherFilterPeriod(p.name);
+      message.info(`已跳转到凭证查询，筛选期间：${p.name}`);
+    }
+  };
 
   const handleExportAssetLedger = () => {
     const exportData = assetLedgerData.map((item) => ({
@@ -1050,6 +1551,123 @@ const Reports = () => {
       ),
     },
     {
+      key: 'voucher-query',
+      label: (
+        <span>
+          <SearchOutlined />
+          凭证查询
+        </span>
+      ),
+      children: (
+        <>
+          <Card className="mb-4">
+            <Row gutter={[16, 16]} align="middle">
+              <Col xs={24} sm={12} md={6} lg={5}>
+                <div className="text-gray-500 text-sm mb-1">期间</div>
+                <DatePicker.MonthPicker
+                  style={{ width: '100%' }}
+                  value={voucherFilterPeriod ? dayjs(voucherFilterPeriod) : undefined}
+                  onChange={(date) => setVoucherFilterPeriod(date ? date.format('YYYY-MM') : undefined)}
+                  placeholder="选择期间"
+                  allowClear
+                />
+              </Col>
+              <Col xs={24} sm={12} md={6} lg={5}>
+                <div className="text-gray-500 text-sm mb-1">凭证类型</div>
+                <Select
+                  style={{ width: '100%' }}
+                  value={voucherFilterType}
+                  onChange={(value) => setVoucherFilterType(value)}
+                >
+                  <Option value="all">全部</Option>
+                  <Option value="depreciation">折旧</Option>
+                  <Option value="scrap">报废</Option>
+                </Select>
+              </Col>
+              <Col xs={24} sm={12} md={6} lg={5}>
+                <div className="text-gray-500 text-sm mb-1">凭证状态</div>
+                <Select
+                  style={{ width: '100%' }}
+                  value={voucherFilterStatus}
+                  onChange={(value) => setVoucherFilterStatus(value)}
+                >
+                  <Option value="all">全部</Option>
+                  <Option value="draft">草稿</Option>
+                  <Option value="posted">已入账</Option>
+                  <Option value="revoked">已撤回</Option>
+                </Select>
+              </Col>
+              <Col xs={24} sm={12} md={6} lg={5}>
+                <div className="text-gray-500 text-sm mb-1">&nbsp;</div>
+                <Button icon={<ReloadOutlined />} onClick={handleResetVoucherFilters}>
+                  重置
+                </Button>
+              </Col>
+            </Row>
+          </Card>
+
+          <Card
+            title={
+              <Space>
+                <span>凭证列表</span>
+                <Tag color="blue">共 {filteredVoucherList.length} 条</Tag>
+              </Space>
+            }
+          >
+            <Table
+              columns={voucherQueryColumns}
+              dataSource={filteredVoucherList}
+              rowKey="id"
+              pagination={{
+                current: 1,
+                pageSize: 10,
+                showSizeChanger: true,
+                showQuickJumper: true,
+                showTotal: (total) => `共 ${total} 条记录`,
+              }}
+              scroll={{ x: 1400 }}
+              size="middle"
+              locale={{ emptyText: '暂无凭证数据' }}
+            />
+          </Card>
+        </>
+      ),
+    },
+    {
+      key: 'finance-trend',
+      label: (
+        <span>
+          <LineChartOutlined />
+          财务趋势分析
+        </span>
+      ),
+      children: (
+        <>
+          <Card className="mb-4">
+            <ReactECharts
+              option={monthlyDepreciationVoucherOption}
+              style={{ height: '380px' }}
+              onEvents={{ click: handleTrendChartClick }}
+            />
+          </Card>
+          <Card className="mb-4">
+            <ReactECharts
+              option={monthlyScrapGainLossOption}
+              style={{ height: '380px' }}
+              onEvents={{ click: handleTrendChartClick }}
+            />
+          </Card>
+          <Card>
+            <ReactECharts
+              option={monthlyResidualIncomeOption}
+              style={{ height: '380px' }}
+              onEvents={{ click: handleTrendChartClick }}
+            />
+          </Card>
+        </>
+      ),
+    },
+    {
       key: 'category-summary',
       label: (
         <span>
@@ -1121,6 +1739,142 @@ const Reports = () => {
     },
   ];
 
+  const renderVoucherDetailModal = () => (
+    <Modal
+      title="凭证详情"
+      open={voucherDetailModalVisible}
+      onCancel={() => {
+        setVoucherDetailModalVisible(false);
+        setCurrentVoucherDetail(null);
+      }}
+      footer={getVoucherDetailFooter()}
+      width={850}
+      destroyOnClose
+    >
+      {currentVoucherDetail && (
+        <>
+          <Descriptions column={2} bordered size="small" className="mb-4">
+            <Descriptions.Item label="凭证编号">
+              <span className="font-mono">{currentVoucherDetail.voucherNo}</span>
+            </Descriptions.Item>
+            <Descriptions.Item label="凭证状态">
+              <Tag color={VOUCHER_STATUS_COLORS[currentVoucherDetail.status]}>
+                {VOUCHER_STATUS_LABELS[currentVoucherDetail.status]}
+              </Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="凭证类型">
+              <Tag color={VOUCHER_TYPE_COLORS[currentVoucherDetail.type]}>
+                {VOUCHER_TYPE_LABELS[currentVoucherDetail.type]}
+              </Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="期间">{currentVoucherDetail.period}</Descriptions.Item>
+            <Descriptions.Item label="借方合计">
+              <span className="text-orange-600 font-medium">{formatCurrency(currentVoucherDetail.totalDebit)}</span>
+            </Descriptions.Item>
+            <Descriptions.Item label="贷方合计">
+              <span className="text-green-600 font-medium">{formatCurrency(currentVoucherDetail.totalCredit)}</span>
+            </Descriptions.Item>
+            <Descriptions.Item label="创建人">{getVoucherUserName(currentVoucherDetail.createdBy)}</Descriptions.Item>
+            <Descriptions.Item label="创建时间">{currentVoucherDetail.createdAt}</Descriptions.Item>
+            {currentVoucherDetail.postedAt && (
+              <>
+                <Descriptions.Item label="入账人">{getVoucherUserName(currentVoucherDetail.postedBy)}</Descriptions.Item>
+                <Descriptions.Item label="入账时间">{currentVoucherDetail.postedAt}</Descriptions.Item>
+              </>
+            )}
+            {currentVoucherDetail.revokedAt && (
+              <>
+                <Descriptions.Item label="撤回人">{getVoucherUserName(currentVoucherDetail.revokedBy)}</Descriptions.Item>
+                <Descriptions.Item label="撤回时间">{currentVoucherDetail.revokedAt}</Descriptions.Item>
+              </>
+            )}
+          </Descriptions>
+
+          {currentVoucherDetail.type === 'scrap' && (
+            <Descriptions title="报废资产信息" column={2} bordered size="small" className="mb-4">
+              <Descriptions.Item label="资产编号">
+                <span className="font-mono">{currentVoucherDetail.assetNo}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="资产名称">{currentVoucherDetail.assetName}</Descriptions.Item>
+              <Descriptions.Item label="原值">
+                <span className="text-blue-600 font-medium">{formatCurrency(currentVoucherDetail.originalValue)}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="累计折旧">
+                <span className="text-purple-600 font-medium">{formatCurrency(currentVoucherDetail.accumulatedDepreciation)}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="净值">
+                <span className="text-green-600 font-medium">{formatCurrency(currentVoucherDetail.netValue)}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="残值收入">
+                <span className="text-orange-600 font-medium">{formatCurrency(currentVoucherDetail.residualIncome)}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="报废损益" span={2}>
+                <span className={currentVoucherDetail.gainLoss >= 0 ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>
+                  {currentVoucherDetail.gainLoss >= 0 ? '收益' : '损失'}: {formatCurrency(Math.abs(currentVoucherDetail.gainLoss))}
+                </span>
+              </Descriptions.Item>
+            </Descriptions>
+          )}
+
+          {currentVoucherDetail.type === 'depreciation' && (
+            <Descriptions title="折旧汇总信息" column={2} bordered size="small" className="mb-4">
+              <Descriptions.Item label="汇总维度">
+                {currentVoucherDetail.summaryDimension === 'category' ? '按资产类别' : '按使用部门'}
+              </Descriptions.Item>
+              <Descriptions.Item label="资产数量">{currentVoucherDetail.assetCount} 项</Descriptions.Item>
+            </Descriptions>
+          )}
+
+          <div className="mb-2 font-medium text-gray-700">借贷明细</div>
+          <Table
+            size="small"
+            dataSource={currentVoucherDetail.entries}
+            pagination={false}
+            rowKey={(r, i) => `${r.accountCode}-${r.direction}-${i}`}
+            columns={[
+              { title: '摘要', dataIndex: 'summary', key: 'summary', width: 280, ellipsis: true },
+              {
+                title: '借方',
+                key: 'debit',
+                width: 260,
+                render: (_, record) => record.direction === 'debit' ? (
+                  <div>
+                    <div className="text-xs text-gray-500">{record.accountCode} {record.accountName}</div>
+                    <div className="font-medium text-orange-600">{formatCurrency(record.amount)}</div>
+                  </div>
+                ) : <span className="text-gray-300">-</span>,
+              },
+              {
+                title: '贷方',
+                key: 'credit',
+                width: 260,
+                render: (_, record) => record.direction === 'credit' ? (
+                  <div>
+                    <div className="text-xs text-gray-500">{record.accountCode} {record.accountName}</div>
+                    <div className="font-medium text-green-600">{formatCurrency(record.amount)}</div>
+                  </div>
+                ) : <span className="text-gray-300">-</span>,
+              },
+            ]}
+            summary={() => {
+              const debit = currentVoucherDetail.entries.filter(e => e.direction === 'debit').reduce((s, e) => s + e.amount, 0);
+              const credit = currentVoucherDetail.entries.filter(e => e.direction === 'credit').reduce((s, e) => s + e.amount, 0);
+              return (
+                <>
+                  <Table.Summary.Row>
+                    <Table.Summary.Cell index={0} align="right"><b>合计：</b></Table.Summary.Cell>
+                    <Table.Summary.Cell index={1}><b className="text-orange-600">{formatCurrency(Math.round(debit * 100) / 100)}</b></Table.Summary.Cell>
+                    <Table.Summary.Cell index={2}><b className="text-green-600">{formatCurrency(Math.round(credit * 100) / 100)}</b></Table.Summary.Cell>
+                  </Table.Summary.Row>
+                </>
+              );
+            }}
+          />
+        </>
+      )}
+    </Modal>
+  );
+
   return (
     <div className="p-6">
       <Card
@@ -1133,6 +1887,7 @@ const Reports = () => {
       >
         <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
       </Card>
+      {renderVoucherDetailModal()}
     </div>
   );
 };
